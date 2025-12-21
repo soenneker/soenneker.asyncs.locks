@@ -3,13 +3,21 @@
 [![](https://img.shields.io/nuget/dt/soenneker.asyncs.locks.svg?style=for-the-badge)](https://www.nuget.org/packages/soenneker.asyncs.locks/)
 
 # Soenneker.Asyncs.Locks
+### The fastest .NET async lock
 
 This library provides a single primitive: `AsyncLock`.
 
-Its primary goal is **performance**, specifically:
-- minimal latency on the uncontended path
-- zero allocations unless contention occurs
-- predictable behavior under load
+### Design goal
+
+The goal of `AsyncLock` is to provide the **fastest possible correct mutex** for real world .NET systems.
+
+Specifically, it is designed to:
+
+* make the uncontended case as close to a single atomic operation as possible
+* avoid allocations, tasks, queues, and state machines unless contention actually occurs
+* support cancellation and disposal without contaminating the fast path
+* allow async and synchronous code to share the same lock safely
+* preserve deterministic behavior under contention
 
 ---
 
@@ -55,7 +63,7 @@ if (_lock.TryLock(out var releaser))
 
 ---
 
-## Performance First
+## Benchmarks
 
 Async lock acquisition
 
