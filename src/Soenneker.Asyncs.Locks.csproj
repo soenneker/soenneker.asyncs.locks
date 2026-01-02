@@ -16,7 +16,7 @@
         <AssemblyName>Soenneker.Asyncs.Locks</AssemblyName>
         <PackageId>Soenneker.Asyncs.Locks</PackageId>
         <PackageTags>asyncs locks async util initialization gate mutex semaphore semaphoreslim asynclock csharp dotnet c# .net asynclocks</PackageTags>
-        <Copyright>Copyright © 2025 Jake Soenneker</Copyright>
+        <Copyright>Copyright © 2025-2026 Jake Soenneker</Copyright>
         <Authors>Jake Soenneker</Authors>
         <Company>https://soenneker.com</Company>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
