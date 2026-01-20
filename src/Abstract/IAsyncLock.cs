@@ -12,7 +12,6 @@ namespace Soenneker.Asyncs.Locks.Abstract;
 /// This interface provides a lock mechanism optimized for low allocations and correct concurrency:
 /// </para>
 /// <list type="bullet">
-/// <item><description>Internal gate: .NET 10 System.Threading.LockSync (protects queue + state transitions)</description></item>
 /// <item><description>State tracking: ValueAtomicBool (_held, _disposed)</description></item>
 /// <item><description>Async waits: pooled IValueTaskSource waiters (no Task alloc)</description></item>
 /// <item><description>Sync waits: TaskCompletionSource only when contended (safe; avoids lost wakeups)</description></item>
@@ -34,8 +33,24 @@ public interface IAsyncLock : IDisposable, IAsyncDisposable
     /// <exception cref="OperationCanceledException">Thrown when the cancellation token is canceled.</exception>
     ValueTask<Releaser> Lock(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Asynchronously acquires the lock and returns a releaser that releases the lock when disposed.
+    /// </summary>
+    /// <remarks>If the lock is already held, the returned task completes when the lock becomes available. The
+    /// caller is responsible for disposing the returned <see cref="Releaser"/> to avoid deadlocks.</remarks>
+    /// <returns>A <see cref="ValueTask{TResult}"/> that represents the asynchronous operation. The result contains a <see
+    /// cref="Releaser"/> that must be disposed to release the lock.</returns>
     ValueTask<Releaser> Lock();
 
+    /// <summary>
+    /// Attempts to acquire the lock without blocking.
+    /// </summary>
+    /// <remarks>Use the returned <see cref="Releaser"/> in a using statement to ensure the lock is properly
+    /// released. If the method returns false, the caller does not own the lock and must not attempt to release
+    /// it.</remarks>
+    /// <param name="releaser">When this method returns, contains a <see cref="Releaser"/> that can be used to release the lock if the
+    /// operation succeeds; otherwise, contains a default value.</param>
+    /// <returns>true if the lock was successfully acquired; otherwise, false.</returns>
     bool TryLock(out Releaser releaser);
 
     /// <summary>
