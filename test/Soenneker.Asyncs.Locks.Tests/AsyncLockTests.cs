@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AwesomeAssertions;
 using Xunit;
 
 namespace Soenneker.Asyncs.Locks.Tests;
@@ -13,7 +14,7 @@ public sealed class AsyncLockTests
     public async Task LockAsync_Uncontended_AcquiresImmediately()
     {
         using var asyncLock = new AsyncLock();
-        Releaser releaser = await asyncLock.Lock();
+        Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
         releaser.Dispose();
     }
 
@@ -21,7 +22,7 @@ public sealed class AsyncLockTests
     public void LockSync_Uncontended_AcquiresImmediately()
     {
         using var asyncLock = new AsyncLock();
-        Releaser releaser = asyncLock.LockSync();
+        Releaser releaser = asyncLock.LockSync(TestContext.Current.CancellationToken);
         releaser.Dispose();
     }
 
@@ -35,32 +36,32 @@ public sealed class AsyncLockTests
         // First task acquires lock
         Task firstTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             firstAcquired = true;
-            await Task.Delay(50); // Hold lock briefly
-        });
+            await Task.Delay(50, TestContext.Current.CancellationToken); // Hold lock briefly
+        }, TestContext.Current.CancellationToken);
 
         // Wait for first to acquire
-        await Task.Delay(10);
-        Assert.True(firstAcquired);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
+        firstAcquired.Should().BeTrue();
 
         // Second task waits
         Task secondTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             secondAcquired = true;
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Second should not have acquired yet
-        await Task.Delay(10);
-        Assert.False(secondAcquired);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
+        secondAcquired.Should().BeFalse();
 
         // Wait for first to release
         await firstTask;
         
         // Now second should acquire
-        await Task.Delay(10);
-        Assert.True(secondAcquired);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
+        secondAcquired.Should().BeTrue();
 
         await secondTask;
     }
@@ -75,32 +76,32 @@ public sealed class AsyncLockTests
         // First thread acquires lock
         var firstThread = new Thread(() =>
         {
-            using Releaser releaser = asyncLock.LockSync();
+            using Releaser releaser = asyncLock.LockSync(TestContext.Current.CancellationToken);
             firstAcquired = true;
             Thread.Sleep(50); // Hold lock briefly
         });
 
         firstThread.Start();
         Thread.Sleep(10); // Wait for first to acquire
-        Assert.True(firstAcquired);
+        firstAcquired.Should().BeTrue();
 
         // Second thread waits
         var secondThread = new Thread(() =>
         {
-            using Releaser releaser = asyncLock.LockSync();
+            using Releaser releaser = asyncLock.LockSync(TestContext.Current.CancellationToken);
             secondAcquired = true;
         });
 
         secondThread.Start();
         Thread.Sleep(10); // Second should not have acquired yet
-        Assert.False(secondAcquired);
+        secondAcquired.Should().BeFalse();
 
         // Wait for first to release
         firstThread.Join();
         
         // Now second should acquire
         Thread.Sleep(10);
-        Assert.True(secondAcquired);
+        secondAcquired.Should().BeTrue();
 
         secondThread.Join();
     }
@@ -114,17 +115,17 @@ public sealed class AsyncLockTests
         // First acquires immediately
         Task firstTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             order.Enqueue(1);
-            await Task.Delay(30);
-        });
+            await Task.Delay(30, TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken);
 
-        await Task.Delay(5);
+        await Task.Delay(5, TestContext.Current.CancellationToken);
 
         // Second and third wait (start in deterministic order to avoid scheduling races)
         async Task Acquire(int id)
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             order.Enqueue(id);
         }
 
@@ -135,7 +136,7 @@ public sealed class AsyncLockTests
         await Task.WhenAll(secondTask, thirdTask);
 
         int[] results = order.ToArray();
-        Assert.Equal(new[] { 1, 2, 3 }, results);
+        results.Should().Equal(1, 2, 3);
     }
 
     [Fact]
@@ -147,20 +148,21 @@ public sealed class AsyncLockTests
         // First task holds the lock
         Task firstTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
-            await Task.Delay(100);
-        });
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken);
 
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
 
         // Second task waits with cancellation
         Task<Releaser> secondTask = asyncLock.Lock(cts.Token)
                                              .AsTask();
 
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
         cts.Cancel();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(async () => await secondTask);
+        Func<Task> act = async () => await secondTask;
+        await act.Should().ThrowAsync<OperationCanceledException>();
         await firstTask;
     }
 
@@ -187,7 +189,7 @@ public sealed class AsyncLockTests
             try
             {
                 using Releaser releaser = asyncLock.LockSync(cts.Token);
-                Assert.Fail("Should have been canceled");
+                throw new Exception("Should have been canceled");
             }
             catch (OperationCanceledException)
             {
@@ -200,7 +202,7 @@ public sealed class AsyncLockTests
         cts.Cancel();
         secondThread.Join();
 
-        Assert.True(canceled);
+        canceled.Should().BeTrue();
         firstThread.Join();
     }
 
@@ -211,10 +213,8 @@ public sealed class AsyncLockTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
-        {
-            await asyncLock.Lock(cts.Token);
-        });
+        var act = asyncLock.Awaiting(l => l.Lock(cts.Token).AsTask());
+        await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -224,10 +224,9 @@ public sealed class AsyncLockTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        Assert.Throws<OperationCanceledException>(() =>
-        {
-            asyncLock.LockSync(cts.Token);
-        });
+        asyncLock.Invoking(l => l.LockSync(cts.Token))
+                 .Should()
+                 .Throw<OperationCanceledException>();
     }
 
     [Fact]
@@ -236,15 +235,12 @@ public sealed class AsyncLockTests
         var asyncLock = new AsyncLock();
         asyncLock.Dispose();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
-        {
-            await asyncLock.Lock();
-        });
+        var act = asyncLock.Awaiting(l => l.Lock().AsTask());
+        await act.Should().ThrowAsync<ObjectDisposedException>();
 
-        Assert.Throws<ObjectDisposedException>(() =>
-        {
-            asyncLock.LockSync();
-        });
+        asyncLock.Invoking(l => l.LockSync())
+                 .Should()
+                 .Throw<ObjectDisposedException>();
     }
 
     [Fact]
@@ -256,22 +252,23 @@ public sealed class AsyncLockTests
         // First task holds the lock
         Task firstTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             firstAcquired = true;
-            await Task.Delay(100);
-        });
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken);
 
-        await Task.Delay(10);
-        Assert.True(firstAcquired);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
+        firstAcquired.Should().BeTrue();
 
         // Second task waits
-        Task<Releaser> secondTask = asyncLock.Lock()
+        Task<Releaser> secondTask = asyncLock.Lock(TestContext.Current.CancellationToken)
                                              .AsTask();
 
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
         asyncLock.Dispose();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await secondTask);
+        Func<Task> act = async () => await secondTask;
+        await act.Should().ThrowAsync<ObjectDisposedException>();
         await firstTask;
     }
 
@@ -283,16 +280,16 @@ public sealed class AsyncLockTests
 
         Task task = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
-            await Task.Delay(50);
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
+            await Task.Delay(50, TestContext.Current.CancellationToken);
             completed = true;
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
         asyncLock.Dispose();
         await task;
 
-        Assert.True(completed);
+        completed.Should().BeTrue();
     }
 
     [Fact]
@@ -301,40 +298,50 @@ public sealed class AsyncLockTests
         var asyncLock = new AsyncLock();
         var released = false;
 
+        var acquired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         Task task = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
-            await Task.Delay(50);
-            released = true;
-        });
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
+            acquired.TrySetResult(true);
 
-        await Task.Delay(10);
+            await allowRelease.Task;
+            released = true;
+        }, TestContext.Current.CancellationToken);
+
+        await acquired.Task.WaitAsync(TestContext.Current.CancellationToken);
+
         ValueTask disposeTask = asyncLock.DisposeAsync();
-        
-        // DisposeAsync should wait
-        await Task.Delay(30);
-        Assert.False(disposeTask.IsCompleted);
-        
+
+        // DisposeAsync should wait for the current holder to exit.
+        disposeTask.IsCompleted.Should().BeFalse();
+
+        allowRelease.TrySetResult(true);
+
         await task;
         await disposeTask;
-        
-        Assert.True(released);
+
+        released.Should().BeTrue();
     }
 
     [Fact]
     public void Dispose_CanBeCalledMultipleTimes()
     {
         var asyncLock = new AsyncLock();
-        asyncLock.Dispose();
-        asyncLock.Dispose(); // Should not throw
+        asyncLock.Invoking(l => l.Dispose()).Should().NotThrow();
+        asyncLock.Invoking(l => l.Dispose()).Should().NotThrow(); // Should not throw
     }
 
     [Fact]
     public async Task DisposeAsync_CanBeCalledMultipleTimes()
     {
         var asyncLock = new AsyncLock();
-        await asyncLock.DisposeAsync();
-        await asyncLock.DisposeAsync(); // Should not throw
+        var act1 = asyncLock.Awaiting(l => l.DisposeAsync().AsTask());
+        await act1.Should().NotThrowAsync();
+
+        var act2 = asyncLock.Awaiting(l => l.DisposeAsync().AsTask());
+        await act2.Should().NotThrowAsync(); // Should not throw
     }
 
     [Fact]
@@ -346,36 +353,36 @@ public sealed class AsyncLockTests
         // Async first
         Task asyncTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             order.Enqueue("async1");
-            await Task.Delay(30);
-        });
+            await Task.Delay(30, TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken);
 
-        await Task.Delay(5);
+        await Task.Delay(5, TestContext.Current.CancellationToken);
 
         // Sync waits
         var syncThread = new Thread(() =>
         {
-            using Releaser releaser = asyncLock.LockSync();
+            using Releaser releaser = asyncLock.LockSync(TestContext.Current.CancellationToken);
             order.Enqueue("sync");
         });
 
         syncThread.Start();
-        await Task.Delay(5);
+        await Task.Delay(5, TestContext.Current.CancellationToken);
 
         // Another async waits
         Task asyncTask2 = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             order.Enqueue("async2");
-        });
+        }, TestContext.Current.CancellationToken);
 
         await asyncTask;
         syncThread.Join();
         await asyncTask2;
 
         string[] results = order.ToArray();
-        Assert.Equal(new[] { "async1", "sync", "async2" }, results);
+        results.Should().Equal("async1", "sync", "async2");
     }
 
     [Fact]
@@ -386,24 +393,24 @@ public sealed class AsyncLockTests
 
         Task firstTask = Task.Run(async () =>
         {
-            Releaser releaser = await asyncLock.Lock();
-            await Task.Delay(30);
+            Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
+            await Task.Delay(30, TestContext.Current.CancellationToken);
             releaser.Dispose(); // Explicit dispose
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
 
         Task secondTask = Task.Run(async () =>
         {
-            using Releaser releaser = await asyncLock.Lock();
+            using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
             secondAcquired = true;
-        });
+        }, TestContext.Current.CancellationToken);
 
         await firstTask;
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
         await secondTask;
 
-        Assert.True(secondAcquired);
+        secondAcquired.Should().BeTrue();
     }
 
     [Fact]
@@ -419,16 +426,16 @@ public sealed class AsyncLockTests
             {
                 for (int j = 0; j < 10; j++)
                 {
-                    using Releaser releaser = await asyncLock.Lock();
+                    using Releaser releaser = await asyncLock.Lock(TestContext.Current.CancellationToken);
                     Interlocked.Increment(ref count);
                     await Task.Yield();
                 }
-            });
+            }, TestContext.Current.CancellationToken);
         }
 
         await Task.WhenAll(tasks);
 
-        Assert.Equal(100, count);
+        count.Should().Be(100);
     }
 
     [Fact]
@@ -444,7 +451,7 @@ public sealed class AsyncLockTests
             {
                 for (int j = 0; j < 10; j++)
                 {
-                    using Releaser releaser = asyncLock.LockSync();
+                    using Releaser releaser = asyncLock.LockSync(TestContext.Current.CancellationToken);
                     Interlocked.Increment(ref count);
                 }
             });
@@ -456,7 +463,7 @@ public sealed class AsyncLockTests
             thread.Join();
         }
 
-        Assert.Equal(100, count);
+        count.Should().Be(100);
     }
 
     [Fact]
@@ -465,12 +472,10 @@ public sealed class AsyncLockTests
         var asyncLock = new AsyncLock();
         asyncLock.Dispose();
 
-        var ex = await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
-        {
-            await asyncLock.Lock();
-        });
+        var act = asyncLock.Awaiting(l => l.Lock().AsTask());
+        var ex = await act.Should().ThrowAsync<ObjectDisposedException>();
 
-        Assert.Equal(nameof(AsyncLock), ex.ObjectName);
+        ex.And.ObjectName.Should().Be(nameof(AsyncLock));
     }
 
     [Fact]
@@ -479,12 +484,11 @@ public sealed class AsyncLockTests
         var asyncLock = new AsyncLock();
         asyncLock.Dispose();
 
-        var ex = Assert.Throws<ObjectDisposedException>(() =>
-        {
-            asyncLock.LockSync();
-        });
+        var ex = asyncLock.Invoking(l => l.LockSync())
+                          .Should()
+                          .Throw<ObjectDisposedException>();
 
-        Assert.Equal(nameof(AsyncLock), ex.ObjectName);
+        ex.And.ObjectName.Should().Be(nameof(AsyncLock));
     }
 
     [Fact]
@@ -501,21 +505,21 @@ public sealed class AsyncLockTests
             {
                 try
                 {
-                    await asyncLock.Lock();
+                    await asyncLock.Lock(TestContext.Current.CancellationToken);
                 }
                 catch (Exception ex)
                 {
                     exceptions.Add(ex);
                 }
-            });
+            }, TestContext.Current.CancellationToken);
         }
 
-        await Task.Delay(10);
+        await Task.Delay(10, TestContext.Current.CancellationToken);
         asyncLock.Dispose();
 
         await Task.WhenAll(acquireTasks);
 
         // All should have either succeeded before dispose or gotten ObjectDisposedException
-        Assert.True(exceptions.All(e => e is ObjectDisposedException) || exceptions.Count == 0);
+        (exceptions.Count == 0 || exceptions.All(e => e is ObjectDisposedException)).Should().BeTrue();
     }
 }
