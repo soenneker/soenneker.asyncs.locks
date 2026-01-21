@@ -1,7 +1,8 @@
-﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Attributes;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using NExtensionsAsyncLock = NExtensions.Async.AsyncLock;
 using NitoAsyncLock = Nito.AsyncEx.AsyncLock;
 using SoennekerAsyncLock = Soenneker.Asyncs.Locks.AsyncLock;
 
@@ -12,6 +13,7 @@ public class LockOverWorkBenchmark
 {
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
+    private NExtensionsAsyncLock _nextensionsLock = null!;
     private SemaphoreSlim _semaphoreSlim = null!;
     private int _counter;
 
@@ -20,6 +22,7 @@ public class LockOverWorkBenchmark
     {
         _soennekerLock = new SoennekerAsyncLock();
         _nitoLock = new NitoAsyncLock();
+        _nextensionsLock = new NExtensionsAsyncLock();
         _semaphoreSlim = new SemaphoreSlim(1, 1);
     }
 
@@ -33,23 +36,37 @@ public class LockOverWorkBenchmark
     [Benchmark(Description = "Soenneker.AsyncLock (async) + small work")]
     public async ValueTask SoennekerAsync_WithWork()
     {
-        using Releaser releaser = await _soennekerLock.Lock().ConfigureAwait(false);
-        _counter++;
-        Thread.SpinWait(16);
+        using (await _soennekerLock.Lock())
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
     }
 
     [Benchmark(Description = "Nito.AsyncEx.AsyncLock + small work")]
     public async ValueTask NitoAsync_WithWork()
     {
-        using IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
-        _counter++;
-        Thread.SpinWait(16);
+        using (await _nitoLock.LockAsync())
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
+    }
+
+    [Benchmark(Description = "NExtensions.Async.AsyncLock + small work")]
+    public async ValueTask NExtensionsAsync_WithWork()
+    {
+        using (await _nextensionsLock.EnterScopeAsync())
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
     }
 
     [Benchmark(Description = "SemaphoreSlim + small work")]
     public async ValueTask SemaphoreSlimAsync_WithWork()
     {
-        await _semaphoreSlim.WaitAsync().ConfigureAwait(false);
+        await _semaphoreSlim.WaitAsync();
         _counter++;
         Thread.SpinWait(16);
         _semaphoreSlim.Release();

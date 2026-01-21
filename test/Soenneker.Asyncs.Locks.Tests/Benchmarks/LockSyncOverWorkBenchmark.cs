@@ -1,6 +1,7 @@
-﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Attributes;
 using System;
 using System.Threading;
+using NExtensionsAsyncLock = NExtensions.Async.AsyncLock;
 using NitoAsyncLock = Nito.AsyncEx.AsyncLock;
 using SoennekerAsyncLock = Soenneker.Asyncs.Locks.AsyncLock;
 
@@ -11,6 +12,7 @@ public class LockSyncOverWorkBenchmark
 {
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
+    private NExtensionsAsyncLock _nextensionsLock = null!;
     private SemaphoreSlim _semaphoreSlim = null!;
     private int _counter;
 
@@ -19,6 +21,7 @@ public class LockSyncOverWorkBenchmark
     {
         _soennekerLock = new SoennekerAsyncLock();
         _nitoLock = new NitoAsyncLock();
+        _nextensionsLock = new NExtensionsAsyncLock();
         _semaphoreSlim = new SemaphoreSlim(1, 1);
     }
 
@@ -32,17 +35,31 @@ public class LockSyncOverWorkBenchmark
     [Benchmark(Description = "Soenneker.AsyncLock (sync) + small work")]
     public void SoennekerSync_WithWork()
     {
-        using Releaser releaser = _soennekerLock.LockSync();
-        _counter++;
-        Thread.SpinWait(16); // tiny critical-section work
+        using (_soennekerLock.LockSync())
+        {
+            _counter++;
+            Thread.SpinWait(16); // tiny critical-section work
+        }
     }
 
     [Benchmark(Description = "Nito.AsyncEx.AsyncLock (sync) + small work")]
     public void NitoSync_WithWork()
     {
-        using IDisposable releaser = _nitoLock.Lock();
-        _counter++;
-        Thread.SpinWait(16);
+        using (_nitoLock.Lock())
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
+    }
+
+    [Benchmark(Description = "NExtensions.Async.AsyncLock (sync) + small work")]
+    public void NExtensionsSync_WithWork()
+    {
+        using (_nextensionsLock.EnterScopeAsync().GetAwaiter().GetResult())
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
     }
 
     [Benchmark(Description = "SemaphoreSlim (sync) + small work")]

@@ -1,6 +1,7 @@
-﻿using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Attributes;
 using System;
 using System.Threading;
+using NExtensionsAsyncLock = NExtensions.Async.AsyncLock;
 using NitoAsyncLock = Nito.AsyncEx.AsyncLock;
 using SoennekerAsyncLock = Soenneker.Asyncs.Locks.AsyncLock;
 
@@ -11,6 +12,7 @@ public class LockSyncBenchmark
 {
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
+    private NExtensionsAsyncLock _nextensionsLock = null!;
     private SemaphoreSlim _semaphoreSlim = null!;
 
     [GlobalSetup]
@@ -18,6 +20,7 @@ public class LockSyncBenchmark
     {
         _soennekerLock = new SoennekerAsyncLock();
         _nitoLock = new NitoAsyncLock();
+        _nextensionsLock = new NExtensionsAsyncLock();
         _semaphoreSlim = new SemaphoreSlim(1, 1);
     }
 
@@ -38,6 +41,12 @@ public class LockSyncBenchmark
     public void NitoSync()
     {
         using IDisposable releaser = _nitoLock.Lock();
+    }
+
+    [Benchmark(Description = "NExtensions.Async.AsyncLock (sync)")]
+    public void NExtensionsSync()
+    {
+        using var releaser = _nextensionsLock.EnterScopeAsync().GetAwaiter().GetResult();
     }
 
     [Benchmark(Description = "SemaphoreSlim (sync)")]
