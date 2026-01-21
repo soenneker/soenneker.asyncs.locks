@@ -4,22 +4,18 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Threading.Tasks.Sources;
 
 namespace Soenneker.Asyncs.Locks;
 
 /// <summary>
 /// Wait node:
-/// - async mode: ManualResetValueTaskSourceCore (pooled)
-/// - sync mode: TaskCompletionSource (allocated only when contended sync)
+/// - async/sync mode: TaskCompletionSource (pooled waiter, new TCS per wait)
 /// </summary>
-internal sealed class Waiter : IValueTaskSource<Releaser>
+internal sealed class Waiter
 {
     private static readonly ConcurrentBag<Waiter> _pool = [];
 
-    private ManualResetValueTaskSourceCore<Releaser> _core = new() { RunContinuationsAsynchronously = true };
-
-    private TaskCompletionSource<Releaser>? _tcs; // sync-only
+    private TaskCompletionSource<Releaser>? _tcs;
 
     private CancellationToken _token;
     private CancellationTokenRegistration _ctr;
@@ -31,10 +27,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     // lifecycle bit flags:
     // 1 = dequeued from AsyncLock queue
     // 2 = consumed by waiter (awaited or sync waited)
-    private int _lifecycle;
-
-    // 0 = async, 1 = sync
-    private int _kind;
+    private ValueAtomicInt _lifecycle;
 
     private Waiter()
     {
@@ -46,14 +39,19 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
         if (!_pool.TryTake(out Waiter? w))
             w = new Waiter();
 
-        w._kind = 0;
-        w._tcs = null;
+        w._tcs = new TaskCompletionSource<Releaser>(TaskCreationOptions.RunContinuationsAsynchronously);
         w._token = CancellationToken.None;
         w._ctr = default;
 
-        w._lifecycle = 0;
+        w._lifecycle.Value = 0;
         w._completion.Value = 0;
-        w._core.Reset();
+
+        w._tcs.Task.ContinueWith(
+            static (_, state) => ((Waiter)state!).MarkConsumed(),
+            w,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         return w;
     }
@@ -64,20 +62,18 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
         if (!_pool.TryTake(out Waiter? w))
             w = new Waiter();
 
-        w._kind = 1;
         w._tcs = new TaskCompletionSource<Releaser>(TaskCreationOptions.RunContinuationsAsynchronously);
         w._token = CancellationToken.None;
         w._ctr = default;
 
-        w._lifecycle = 0;
+        w._lifecycle.Value = 0;
         w._completion.Value = 0;
-        w._core.Reset();
 
         return w;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ValueTask<Releaser> AsValueTask() => new(this, _core.Version);
+    public ValueTask<Releaser> AsValueTask() => new(_tcs!.Task);
 
     /// <summary>
     /// Called by <see cref="AsyncLock"/> after this waiter is removed from its internal queue.
@@ -86,7 +82,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MarkDequeued()
     {
-        int prev = Interlocked.Or(ref _lifecycle, 1);
+        int prev = _lifecycle.Or(1);
 
         // If already consumed, it's already been observed by the waiter.
         // Return it to the pool now and tell the caller to skip any further interaction.
@@ -105,7 +101,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void MarkConsumed()
     {
-        int prev = Interlocked.Or(ref _lifecycle, 2);
+        int prev = _lifecycle.Or(2);
 
         // If already dequeued, safe to return to pool now.
         if ((prev & 1) != 0)
@@ -135,19 +131,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
         if (_completion.CompareExchange(1, 0) != 0)
             return;
 
-        var oce = new OperationCanceledException(_token);
-
-        if (_kind == 1)
-        {
-            _tcs!.TrySetException(oce);
-            CleanupCancellation();
-            return;
-        }
-
-        short v = _core.Version;
-        if (_core.GetStatus(v) == ValueTaskSourceStatus.Pending)
-            _core.SetException(oce);
-
+        _tcs!.TrySetException(new OperationCanceledException(_token));
         CleanupCancellation();
     }
 
@@ -159,15 +143,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
 
         try
         {
-            if (_kind == 1)
-                return _tcs!.TrySetResult(releaser);
-
-            short v = _core.Version;
-            if (_core.GetStatus(v) != ValueTaskSourceStatus.Pending)
-                return false;
-
-            _core.SetResult(releaser);
-            return true;
+            return _tcs!.TrySetResult(releaser);
         }
         finally
         {
@@ -183,15 +159,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
 
         try
         {
-            if (_kind == 1)
-            {
-                _tcs?.TrySetException(ex);
-                return;
-            }
-
-            short v = _core.Version;
-            if (_core.GetStatus(v) == ValueTaskSourceStatus.Pending)
-                _core.SetException(ex);
+            _tcs!.TrySetException(ex);
         }
         finally
         {
@@ -219,31 +187,8 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
         CleanupCancellation();
 
         _tcs = null;
-        _kind = 0;
-        _lifecycle = 0;
+        _lifecycle.Value = 0;
         _completion.Value = 0;
         _pool.Add(this);
     }
-
-    // IValueTaskSource<Releaser>
-    Releaser IValueTaskSource<Releaser>.GetResult(short token)
-    {
-        try
-        {
-            return _core.GetResult(token);
-        }
-        finally
-        {
-            MarkConsumed();
-        }
-    }
-
-    ValueTaskSourceStatus IValueTaskSource<Releaser>.GetStatus(short token) => _core.GetStatus(token);
-
-    void IValueTaskSource<Releaser>.OnCompleted(
-        Action<object?> continuation,
-        object? state,
-        short token,
-        ValueTaskSourceOnCompletedFlags flags) =>
-        _core.OnCompleted(continuation, state, token, flags);
 }
