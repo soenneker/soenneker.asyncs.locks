@@ -88,6 +88,6 @@ Synchronous lock acquisition
 
 | Method                               | Mean      | Error     | StdDev    | Median    | Ratio        | RatioSD | Gen0   | Allocated |
 |------------------------------------- |----------:|----------:|----------:|----------:|-------------:|--------:|-------:|----------:|
-| **Soenneker.Asyncs.Lock**          |  8.09 ns | 0.1792 ns | 0.3138 ns |  8.025 ns |     baseline |         |      - |         - |
-| SemaphoreSlim               | 19.49 ns | 0.4031 ns | 0.7268 ns | 19.091 ns | 2.41x slower |   0.13x |      - |         - |
-| Nito.AsyncEx.AsyncLock      | 48.43 ns | 1.0048 ns | 2.9150 ns | 48.046 ns | 6.00x slower |   0.43x | 0.0191 |     320 B |
+| **Soenneker.Asyncs.Lock**          |  8.09 ns | 0.179 ns | 0.314 ns |  8.025 ns |     baseline |         |      - |         - |
+| SemaphoreSlim               | 19.49 ns | 0.403 ns | 0.727 ns | 19.091 ns | 2.41x slower |   0.13x |      - |         - |
+| Nito.AsyncEx.AsyncLock      | 48.43 ns | 1.005 ns | 2.915 ns | 48.046 ns | 6.00x slower |   0.43x | 0.0191 |     320 B |
