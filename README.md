@@ -76,18 +76,20 @@ if (_lock.TryLock(out var releaser))
 
 ## Benchmarks
 
-Async lock acquisition
+### Async lock acquisition
 
-| Method                      | Mean     | Error    | StdDev   | Ratio        | RatioSD | Gen0   | Allocated | 
-|---------------------------- |---------:|---------:|---------:|-------------:|--------:|-------:|----------:|
-| **Soenneker.Asyncs.Lock**       | 10.06 ns | 0.212 ns | 0.393 ns |     baseline |         |      - |         - |
-| SemaphoreSlim               | 19.17 ns | 0.406 ns | 0.360 ns | 1.91x slower |   0.08x |      - |         - |
-| Nito.AsyncEx.AsyncLock      | 55.32 ns | 1.078 ns | 2.645 ns | 5.51x slower |   0.33x | 0.0191 |     320 B |
+| Method                    |     Mean |    Error |   StdDev |   Median |        Ratio | Allocated |
+| ------------------------- | -------: | -------: | -------: | -------: | -----------: | --------: |
+| **Soenneker.Asyncs.Lock** | 10.06 ns | 0.212 ns | 0.393 ns | 10.01 ns |     baseline |         - |
+| SemaphoreSlim             | 19.17 ns | 0.406 ns | 0.360 ns | 19.10 ns | 1.91x slower |         - |
+| Nito.AsyncEx.AsyncLock    | 55.32 ns | 1.078 ns | 2.645 ns | 54.81 ns | 5.51x slower |     320 B |
 
-Synchronous lock acquisition
+---
 
-| Method                               | Mean      | Error     | StdDev    | Median    | Ratio        | RatioSD | Gen0   | Allocated |
-|------------------------------------- |----------:|----------:|----------:|----------:|-------------:|--------:|-------:|----------:|
-| **Soenneker.Asyncs.Lock**          |  8.09 ns | 0.179 ns | 0.314 ns |  8.025 ns |     baseline |         |      - |         - |
-| SemaphoreSlim               | 19.49 ns | 0.403 ns | 0.727 ns | 19.091 ns | 2.41x slower |   0.13x |      - |         - |
-| Nito.AsyncEx.AsyncLock      | 48.43 ns | 1.005 ns | 2.915 ns | 48.046 ns | 6.00x slower |   0.43x | 0.0191 |     320 B |
+### Synchronous lock acquisition
+
+| Method                    |     Mean |    Error |   StdDev |   Median |        Ratio | Allocated |
+| ------------------------- | -------: | -------: | -------: | -------: | -----------: | --------: |
+| **Soenneker.Asyncs.Lock** |  8.09 ns | 0.179 ns | 0.314 ns |  8.03 ns |     baseline |         - |
+| SemaphoreSlim             | 19.49 ns | 0.403 ns | 0.727 ns | 19.09 ns | 2.41x slower |         - |
+| Nito.AsyncEx.AsyncLock    | 48.43 ns | 1.005 ns | 2.915 ns | 48.05 ns | 6.00x slower |     320 B |
