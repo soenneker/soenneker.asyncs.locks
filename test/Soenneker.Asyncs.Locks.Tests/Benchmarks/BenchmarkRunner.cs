@@ -23,8 +23,8 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    //[ManualFact]
-    [LocalFact]
+    [ManualFact]
+   // [LocalFact]
     public async ValueTask LockOverWork()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<LockOverWorkBenchmark>(DefaultConf);
@@ -32,7 +32,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    // [ManualFact]
+     //[ManualFact]
     [LocalFact]
     public async ValueTask LockSync()
     {
@@ -41,8 +41,8 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    //[ManualFact]
-    [LocalFact]
+    [ManualFact]
+  //  [LocalFact]
     public async ValueTask LockSyncOverWork()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<LockSyncOverWorkBenchmark>(DefaultConf);

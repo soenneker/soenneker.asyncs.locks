@@ -187,6 +187,57 @@ public sealed class AsyncLockTests
     }
 
     [Fact]
+    public async Task LockAsync_CancelVsRelease_Race_Stress_ObservesOneOutcome()
+    {
+        using var asyncLock = new AsyncLock();
+
+        for (int i = 0; i < 5000; i++)
+        {
+            Releaser holder = await asyncLock.Lock(TestToken);
+            using var cts = new CancellationTokenSource();
+
+            Task<Releaser> waiterTask = asyncLock.Lock(cts.Token).AsTask();
+
+            var start = new ManualResetEventSlim(false);
+
+            Task cancelTask = Task.Run(() =>
+            {
+                start.Wait();
+                cts.Cancel();
+            }, TestToken);
+
+            Task releaseTask = Task.Run(() =>
+            {
+                start.Wait();
+                holder.Dispose();
+            }, TestToken);
+
+            start.Set();
+
+            Task completed = await Task.WhenAny(waiterTask, Task.Delay(DefaultTimeout, TestToken));
+            completed.Should().Be(waiterTask);
+
+            bool acquired = false;
+            Releaser next = default;
+
+            try
+            {
+                next = await waiterTask;
+                acquired = true;
+            }
+            catch (OperationCanceledException ex)
+            {
+                ex.CancellationToken.Should().Be(cts.Token);
+            }
+
+            await Task.WhenAll(cancelTask, releaseTask).WaitAsync(TimeoutToken());
+
+            if (acquired)
+                next.Dispose();
+        }
+    }
+
+    [Fact]
     public void LockSync_WithCancellation_CancelsWhenRequested()
     {
         using var asyncLock = new AsyncLock();
@@ -301,6 +352,45 @@ public sealed class AsyncLockTests
             Releaser holder = await asyncLock.Lock(TestToken);
             Task<Releaser> waiterTask = asyncLock.Lock(TestToken).AsTask();
             waiterTask.IsCompleted.Should().BeFalse();
+
+            var start = new ManualResetEventSlim(false);
+
+            Task disposeTask = Task.Run(() =>
+            {
+                start.Wait();
+                asyncLock.Dispose();
+            }, TestToken);
+
+            Task releaseTask = Task.Run(() =>
+            {
+                start.Wait();
+                holder.Dispose();
+            }, TestToken);
+
+            start.Set();
+            await Task.WhenAll(disposeTask, releaseTask).WaitAsync(TimeoutToken());
+
+            if (waiterTask.IsCompletedSuccessfully)
+            {
+                using Releaser acquired = await waiterTask;
+            }
+            else
+            {
+                Func<Task> act = async () => await waiterTask;
+                await act.Should().ThrowAsync<ObjectDisposedException>();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_ConcurrentRelease_Stress_CompletesWithValidOutcome()
+    {
+        for (int i = 0; i < 5000; i++)
+        {
+            var asyncLock = new AsyncLock();
+
+            Releaser holder = await asyncLock.Lock(TestToken);
+            Task<Releaser> waiterTask = asyncLock.Lock(TestToken).AsTask();
 
             var start = new ManualResetEventSlim(false);
 
@@ -574,5 +664,41 @@ public sealed class AsyncLockTests
 
         // All should have either succeeded before dispose or gotten ObjectDisposedException
         (exceptions.Count == 0 || exceptions.All(e => e is ObjectDisposedException)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task LockAsync_ConcurrentDispose_Stress_HandlesGracefully()
+    {
+        for (int i = 0; i < 500; i++)
+        {
+            var asyncLock = new AsyncLock();
+            var exceptions = new ConcurrentBag<Exception>();
+
+            var start = NewTcs();
+            var acquireTasks = new Task[10];
+            for (int j = 0; j < acquireTasks.Length; j++)
+            {
+                acquireTasks[j] = Task.Run(async () =>
+                {
+                    await start.Task.WaitAsync(TimeoutToken());
+
+                    try
+                    {
+                        await asyncLock.Lock(TestToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                }, TestToken);
+            }
+
+            start.TrySetResult(true);
+            asyncLock.Dispose();
+
+            await Task.WhenAll(acquireTasks).WaitAsync(TimeoutToken());
+
+            (exceptions.Count == 0 || exceptions.All(e => e is ObjectDisposedException)).Should().BeTrue();
+        }
     }
 }

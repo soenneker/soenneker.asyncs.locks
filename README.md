@@ -78,16 +78,16 @@ if (_lock.TryLock(out var releaser))
 
 Async lock acquisition
 
-| Method                  | Mean     | Median   | Allocated |
-| ----------------------- | -------- | -------- | --------- |
-| **Soenneker.AsyncLock** | 14.53 ns | 14.51 ns | 0 B       |
-| SemaphoreSlim           | 20.68 ns | 20.09 ns | 0 B       |
-| Nito.AsyncEx.AsyncLock  | 62.57 ns | 60.58 ns | 320 B     |
+| Method                      | Mean     | Error    | StdDev   | Ratio        | RatioSD | Gen0   | Allocated | 
+|---------------------------- |---------:|---------:|---------:|-------------:|--------:|-------:|----------:|
+| **Soenneker.Asyncs.Lock**       | 10.06 ns | 0.212 ns | 0.393 ns |     baseline |         |      - |         - |
+| SemaphoreSlim               | 19.17 ns | 0.406 ns | 0.360 ns | 1.91x slower |   0.08x |      - |         - |
+| Nito.AsyncEx.AsyncLock      | 55.32 ns | 1.078 ns | 2.645 ns | 5.51x slower |   0.33x | 0.0191 |     320 B |
 
 Synchronous lock acquisition
 
-| Method                          | Mean      | Median    | Allocated |
-|-------------------------------- |----------:|----------:|-----------|
-| **Soenneker.AsyncLock (sync)**  |  8.08 ns  |  7.97 ns  | 0 B       |
-| SemaphoreSlim (sync)            | 22.05 ns  | 21.76 ns  | 0 B       |
-| Nito.AsyncEx.AsyncLock (sync)   | 60.27 ns  | 58.98 ns  | 320 B     |
+| Method                               | Mean      | Error     | StdDev    | Median    | Ratio        | RatioSD | Gen0   | Allocated |
+|------------------------------------- |----------:|----------:|----------:|----------:|-------------:|--------:|-------:|----------:|
+| **'Soenneker.AsyncLock (sync)'**         |  8.087 ns | 0.1792 ns | 0.3138 ns |  8.025 ns |     baseline |         |      - |         - |
+| 'SemaphoreSlim (sync)'               | 19.494 ns | 0.4031 ns | 0.7268 ns | 19.091 ns | 2.41x slower |   0.13x |      - |         - |
+| 'Nito.AsyncEx.AsyncLock (sync)'      | 48.427 ns | 1.0048 ns | 2.9150 ns | 48.046 ns | 6.00x slower |   0.43x | 0.0191 |     320 B |

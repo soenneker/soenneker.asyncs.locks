@@ -50,7 +50,7 @@ internal sealed class Waiter
             static (_, state) => ((Waiter)state!).MarkConsumed(),
             w,
             CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
+            TaskContinuationOptions.RunContinuationsAsynchronously,
             TaskScheduler.Default);
 
         return w;
@@ -128,22 +128,34 @@ internal sealed class Waiter
 
     private void Cancel()
     {
+        var tcs = _tcs;
+
+        if (tcs is null)
+            return;
+
         if (_completion.CompareExchange(1, 0) != 0)
             return;
 
-        _tcs!.TrySetException(new OperationCanceledException(_token));
-        CleanupCancellation();
+        var token = _token;
+
+        // Don't dispose or clear _ctr here (callback thread).
+        tcs.TrySetException(new OperationCanceledException(token));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGrant(Releaser releaser)
     {
+        var tcs = _tcs;
+
+        if (tcs is null)
+            return false;
+
         if (_completion.CompareExchange(2, 0) != 0)
             return false;
 
         try
         {
-            return _tcs!.TrySetResult(releaser);
+            return tcs.TrySetResult(releaser);
         }
         finally
         {
@@ -154,12 +166,16 @@ internal sealed class Waiter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void TrySetException(Exception ex)
     {
+        var tcs = _tcs;
+        if (tcs is null)
+            return;
+
         if (_completion.CompareExchange(2, 0) != 0)
             return;
 
         try
         {
-            _tcs!.TrySetException(ex);
+            tcs.TrySetException(ex);
         }
         finally
         {
@@ -184,7 +200,12 @@ internal sealed class Waiter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Return()
     {
-        CleanupCancellation();
+        // Safe here; Return happens after completion is observed.
+        if (_ctr != default)
+            _ctr.Dispose();
+
+        _ctr = default;
+        _token = CancellationToken.None;
 
         _tcs = null;
         _lifecycle.Value = 0;
