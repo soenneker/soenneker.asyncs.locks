@@ -7,28 +7,28 @@
 
 This library provides a single primitive: `AsyncLock`.
 
-### Design goals & guarantees
+### Design goal
 
 `AsyncLock` is built to be the **fastest possible correct mutex** for real-world .NET systems.
 
 It provides the following guarantees:
 
-#### Correctness (always)
+#### Cancellation-safe
 
-* **Cancellation-safe**
-  Fully supports cancellation before acquisition and while waiting for both async and sync callers.  
-  Cancelled waiters are removed immediately, never resumed, and never leaked — with **zero impact on the fast path**.
+- Fully supports cancellation before acquisition and while waiting for both async and sync callers.  
+- Cancelled waiters are removed immediately, never resumed, and never leaked — with **zero impact on the fast path**.
 
-* **Unified async + sync locking**
-  Async and synchronous callers share the *same mutex*.  
-  Ordering is preserved without adapters, wrappers, or duplicated synchronization primitives.
+#### Unified async + sync locking
+
+- Async and synchronous callers share the *same mutex*.  
+- Ordering is preserved without adapters, wrappers, or duplicated synchronization primitives.
 
 #### Performance (by design)
 
-* Uncontended acquisition is as close to a single atomic operation as possible
-* No allocations, tasks, or state machines unless contention occurs
-* Cancellation and disposal logic are completely excluded from the fast path
-* Deterministic behavior under contention
+- Uncontended acquisition is as close to a single atomic operation as possible
+- No allocations, tasks, or state machines unless contention occurs
+- Cancellation and disposal logic are completely excluded from the fast path
+- Deterministic behavior under contention
 
 ---
 
