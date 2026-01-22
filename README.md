@@ -26,7 +26,7 @@ It provides the following guarantees:
 #### Performance (by design)
 
 * Uncontended acquisition is as close to a single atomic operation as possible
-* No allocations, tasks, queues, or state machines unless contention occurs
+* No allocations, tasks, or state machines unless contention occurs
 * Cancellation and disposal logic are completely excluded from the fast path
 * Deterministic behavior under contention
 
