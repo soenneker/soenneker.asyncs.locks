@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Threading.Tasks.Sources;
 
 namespace Soenneker.Asyncs.Locks;
 
@@ -11,151 +12,75 @@ namespace Soenneker.Asyncs.Locks;
 /// Wait node:
 /// - async/sync mode: TaskCompletionSource (pooled waiter, new TCS per wait)
 /// </summary>
-internal sealed class Waiter
+internal sealed class Waiter : IValueTaskSource<Releaser>
 {
-    private static readonly ConcurrentBag<Waiter> _pool = [];
+    private static readonly ConcurrentBag<WaiterHandle> _pool = [];
 
-    private TaskCompletionSource<Releaser>? _tcs;
+    private static readonly Action<object?> _cancelCallback = CancelCallback;
+    private static void CancelCallback(object? handle) => ((WaiterHandle) handle!).Cancel();
 
+    private ManualResetValueTaskSourceCore<Releaser> _core = new() { RunContinuationsAsynchronously = true };
+    private bool _completed;
     private CancellationToken _token;
     private CancellationTokenRegistration _ctr;
-
-    // completion state:
-    // 0 = pending, 1 = canceled, 2 = signaled (result/exception)
-    private ValueAtomicInt _completion;
-
-    // lifecycle bit flags:
-    // 1 = dequeued from AsyncLock queue
-    // 2 = consumed by waiter (awaited or sync waited)
-    private ValueAtomicInt _lifecycle;
 
     private Waiter()
     {
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Waiter Rent()
+    public static WaiterHandle Rent()
     {
-        if (!_pool.TryTake(out Waiter? w))
-            w = new Waiter();
-
-        w._tcs = new TaskCompletionSource<Releaser>(TaskCreationOptions.RunContinuationsAsynchronously);
-        w._token = CancellationToken.None;
-        w._ctr = default;
-
-        w._lifecycle.Value = 0;
-        w._completion.Value = 0;
-
-        w._tcs.Task.ContinueWith(
-            static (_, state) => ((Waiter)state!).MarkConsumed(),
-            w,
-            CancellationToken.None,
-            TaskContinuationOptions.RunContinuationsAsynchronously,
-            TaskScheduler.Default);
-
-        return w;
+        return _pool.TryTake(out var waiter) ? waiter : new WaiterHandle(new Waiter(), 0);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Waiter RentSync()
+    public ValueTask<Releaser> AsValueTask() => new(this, _core.Version);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<Releaser> AsValueTask(WaiterHandle handle, CancellationToken token)
     {
-        if (!_pool.TryTake(out Waiter? w))
-            w = new Waiter();
-
-        w._tcs = new TaskCompletionSource<Releaser>(TaskCreationOptions.RunContinuationsAsynchronously);
-        w._token = CancellationToken.None;
-        w._ctr = default;
-
-        w._lifecycle.Value = 0;
-        w._completion.Value = 0;
-
-        return w;
+        RegisterCancellation(handle, token);
+        return AsValueTask();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ValueTask<Releaser> AsValueTask() => new(_tcs!.Task);
-
-    /// <summary>
-    /// Called by <see cref="AsyncLock"/> after this waiter is removed from its internal queue.
-    /// Returns false if the waiter was already consumed (e.g., cancellation observed) and must not be touched further.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool MarkDequeued()
+    public void RegisterCancellation(WaiterHandle handle, CancellationToken token)
     {
-        int prev = _lifecycle.Or(1);
-
-        // If already consumed, it's already been observed by the waiter.
-        // Return it to the pool now and tell the caller to skip any further interaction.
-        if ((prev & 2) != 0)
-        {
-            Return();
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Called by the waiter (awaiter or sync waiter) once completion is observed.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void MarkConsumed()
-    {
-        int prev = _lifecycle.Or(2);
-
-        // If already dequeued, safe to return to pool now.
-        if ((prev & 1) != 0)
-            Return();
-    }
-
-    public void RegisterCancellation(CancellationToken token)
-    {
-        if (!token.CanBeCanceled)
-            return;
-
-        _token = token;
+        if (!token.CanBeCanceled) return;
 
         // Cheap fast-check to avoid registration if already canceled.
         if (token.IsCancellationRequested)
         {
-            Cancel();
+            CancelCore(token);
             return;
         }
 
         // Registration is comparatively expensive: do it last.
-        _ctr = token.UnsafeRegister(static s => ((Waiter)s!).Cancel(), this);
-    }
-
-    private void Cancel()
-    {
-        var tcs = _tcs;
-
-        if (tcs is null)
-            return;
-
-        if (_completion.CompareExchange(1, 0) != 0)
-            return;
-
-        var token = _token;
-
-        // Don't dispose or clear _ctr here (callback thread).
-        tcs.TrySetException(new OperationCanceledException(token));
+        _token = token;
+        _ctr = token.UnsafeRegister(_cancelCallback, handle);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGrant(Releaser releaser)
+    private void CancelCore(CancellationToken token)
     {
-        var tcs = _tcs;
+        _core.SetException(new OperationCanceledException(token));
+    }
 
-        if (tcs is null)
-            return false;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryComplete(short version)
+    {
+        return version == _core.Version && !Interlocked.CompareExchange(ref _completed, true, false);
+    }
 
-        if (_completion.CompareExchange(2, 0) != 0)
-            return false;
-
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Cancel(short version)
+    {
+        if (!TryComplete(version)) return;
+        
         try
         {
-            return tcs.TrySetResult(releaser);
+            CancelCore(_token);
         }
         finally
         {
@@ -164,18 +89,29 @@ internal sealed class Waiter
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void TrySetException(Exception ex)
+    public bool TryGrant(Releaser releaser, short version)
     {
-        var tcs = _tcs;
-        if (tcs is null)
-            return;
+        if (!TryComplete(version)) return false;
+        
+        try
+        {
+            _core.SetResult(releaser);
+            return true;
+        }
+        finally
+        {
+            CleanupCancellation();
+        }
+    }
 
-        if (_completion.CompareExchange(2, 0) != 0)
-            return;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void TrySetException(Exception ex, short version)
+    {
+        if (!TryComplete(version)) return;
 
         try
         {
-            tcs.TrySetException(ex);
+            _core.SetException(ex);
         }
         finally
         {
@@ -191,25 +127,27 @@ internal sealed class Waiter
         _token = CancellationToken.None;
     }
 
-    public Releaser WaitSync()
+    public Releaser GetResult(short token)
     {
-        // Blocks the calling thread. Continuations are async (RunContinuationsAsynchronously).
-        return _tcs!.Task.GetAwaiter().GetResult();
+        try
+        {
+            return _core.GetResult(token);
+        }
+        finally
+        {
+            // Once the task is consumed, it is safe to return this waiter to the pool.
+            _core.Reset();
+            Volatile.Write(ref _completed, false);
+            _pool.Add(new WaiterHandle(this, _core.Version));
+        }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Return()
-    {
-        // Safe here; Return happens after completion is observed.
-        if (_ctr != default)
-            _ctr.Dispose();
+    public ValueTaskSourceStatus GetStatus(short token) => _core.GetStatus(token);
 
-        _ctr = default;
-        _token = CancellationToken.None;
-
-        _tcs = null;
-        _lifecycle.Value = 0;
-        _completion.Value = 0;
-        _pool.Add(this);
-    }
+    public void OnCompleted(
+        Action<object?> continuation,
+        object? state,
+        short token,
+        ValueTaskSourceOnCompletedFlags flags)
+        => _core.OnCompleted(continuation, state, token, flags);
 }
