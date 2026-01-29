@@ -1,4 +1,3 @@
-using Soenneker.Atomics.ValueInts;
 using System;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
@@ -9,8 +8,7 @@ using System.Threading.Tasks.Sources;
 namespace Soenneker.Asyncs.Locks;
 
 /// <summary>
-/// Wait node:
-/// - async/sync mode: TaskCompletionSource (pooled waiter, new TCS per wait)
+/// Wait node, backed by ManualResetValueTaskSourceCore to yield a ValueTask.
 /// </summary>
 internal sealed class Waiter : IValueTaskSource<Releaser>
 {

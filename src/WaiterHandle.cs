@@ -10,7 +10,7 @@ namespace Soenneker.Asyncs.Locks;
 /// If the waiter has moved on to a new version, this class can
 /// no longer be used to complete the waiter.
 /// </summary>
-internal class WaiterHandle(Waiter waiter, short version)
+internal sealed class WaiterHandle(Waiter waiter, short version)
 {
     // The waiter must be handed out in a Lock method and also processed in the Exit()
     // function to be removed from the queue. This bool tracks when one of those has
