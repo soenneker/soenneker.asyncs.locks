@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
+using Soenneker.Atomics.ValueBools;
 
 namespace Soenneker.Asyncs.Locks;
 
@@ -18,7 +19,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     private static void CancelCallback(object? handle) => ((WaiterHandle) handle!).Cancel();
 
     private ManualResetValueTaskSourceCore<Releaser> _core = new() { RunContinuationsAsynchronously = true };
-    private bool _completed;
+    private ValueAtomicBool _completed;
     private CancellationToken _token;
     private CancellationTokenRegistration _ctr;
 
@@ -68,7 +69,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryComplete(short version)
     {
-        return version == _core.Version && !Interlocked.CompareExchange(ref _completed, true, false);
+        return version == _core.Version && _completed.TrySetTrue();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -112,7 +113,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
             // Once the task is consumed, it is safe to return this waiter to the pool.
             CleanupCancellation();
             _core.Reset();
-            Volatile.Write(ref _completed, false);
+            _completed.Value = false;
             _pool.Add(new WaiterHandle(this, _core.Version));
         }
     }
