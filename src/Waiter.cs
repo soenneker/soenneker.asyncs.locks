@@ -75,46 +75,22 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     internal void Cancel(short version)
     {
         if (!TryComplete(version)) return;
-        
-        try
-        {
-            CancelCore(_token);
-        }
-        finally
-        {
-            CleanupCancellation();
-        }
+        CancelCore(_token);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGrant(Releaser releaser, short version)
     {
         if (!TryComplete(version)) return false;
-        
-        try
-        {
-            _core.SetResult(releaser);
-            return true;
-        }
-        finally
-        {
-            CleanupCancellation();
-        }
+        _core.SetResult(releaser);
+        return true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void TrySetException(Exception ex, short version)
     {
         if (!TryComplete(version)) return;
-
-        try
-        {
-            _core.SetException(ex);
-        }
-        finally
-        {
-            CleanupCancellation();
-        }
+        _core.SetException(ex);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -134,6 +110,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
         finally
         {
             // Once the task is consumed, it is safe to return this waiter to the pool.
+            CleanupCancellation();
             _core.Reset();
             Volatile.Write(ref _completed, false);
             _pool.Add(new WaiterHandle(this, _core.Version));
