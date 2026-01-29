@@ -38,6 +38,7 @@ public sealed class AsyncLock : IAsyncLock
     // Must only be accessed under _gate to avoid races.
     private TaskCompletionSource? _disposeWaiter;
 
+    // Initialize queue with the spare waiter
     public AsyncLock() => _waiterQueueHead = _waiterQueueTail = Waiter.Rent();
 
     // Used in Lock methods when handing out a waiter to a consumer.
@@ -135,7 +136,7 @@ public sealed class AsyncLock : IAsyncLock
         // So we either get the lock here, or Exit() knows to hand it to a waiter.
         while (true)
         {
-            int s = _state.Value;
+            var s = _state.Value;
 
             // free -> held
             if ((s & (_lockBit | _disposeBit)) == 0)
@@ -182,7 +183,7 @@ public sealed class AsyncLock : IAsyncLock
 
         while (true)
         {
-            int s = _state.Value;
+            var s = _state.Value;
 
             // free -> held
             if ((s & (_lockBit | _disposeBit)) == 0)
@@ -250,7 +251,7 @@ public sealed class AsyncLock : IAsyncLock
 
         while (true)
         {
-            int s = _state.Value;
+            var s = _state.Value;
             
             if ((s & (_lockBit | _disposeBit)) == 0)
             {
@@ -326,7 +327,7 @@ public sealed class AsyncLock : IAsyncLock
         while (true)
         {
             WaiterHandle handle;
-            bool pop = false;
+            var pop = false;
 
             lock (_gate)
             {
