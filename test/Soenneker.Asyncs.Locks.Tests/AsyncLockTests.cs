@@ -370,14 +370,13 @@ public sealed class AsyncLockTests
             start.Set();
             await Task.WhenAll(disposeTask, releaseTask).WaitAsync(TimeoutToken());
 
-            if (waiterTask.IsCompletedSuccessfully)
+            try
             {
                 using Releaser acquired = await waiterTask;
             }
-            else
+            catch (ObjectDisposedException)
             {
-                Func<Task> act = async () => await waiterTask;
-                await act.Should().ThrowAsync<ObjectDisposedException>();
+                // ignored
             }
         }
     }
