@@ -51,7 +51,11 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
         // Cheap fast-check to avoid registration if already canceled.
         if (token.IsCancellationRequested)
         {
-            CancelCore(token);
+            if (_completed.TrySetTrue())
+            {
+                CancelCore(token);
+            }
+
             return;
         }
 
