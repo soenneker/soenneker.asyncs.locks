@@ -11,15 +11,13 @@ namespace Soenneker.Asyncs.Locks;
 public sealed class AsyncLock : IAsyncLock
 {
     private const int _availableNoWaiters = 0;
-    private const int _lockBit = 1;
-    private const int _disposeBit = 2;
-    private const int _waitersValue = 4;
+    private const int _disposeBit = 1;
+    private const int _lockValue = 2;
 
     /// <summary>
     /// State encoding:
-    /// - bit0: held flag (0 = free, 1 = held)
-    /// - bit1: dispose flag (0 = in use, 1 = disposed)
-    /// - bits2..: announced waiter count * 4 (so we can add/subtract 4 per waiter while preserving bit0 and bit1)
+    /// - bit0: dispose flag (0 = in use, 1 = disposed)
+    /// - bits1..: acquire count * 2 (including current holder, so we can add/subtract 2 per waiter while preserving bit0)
     /// 
     /// This information is encoded in a single value so that checking if the lock is free,
     /// not disposed, and there are no waiters can all happen in a single CAS for the fast path.
@@ -99,15 +97,25 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<Releaser> Lock(CancellationToken cancellationToken)
     {
-        if ((_state.Value & _disposeBit) != 0)
-            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
-
         if (cancellationToken.IsCancellationRequested)
+        {
+            if ((_state.Value & _disposeBit) != 0)
+                return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+            
             return ValueTask.FromCanceled<Releaser>(cancellationToken);
+        }
 
-        // Fast path: free (0) -> held (1)
-        if (_state.TrySet(_lockBit, _availableNoWaiters))
+        // Fast path: free -> held
+        var state = _state.Add(_lockValue);
+        
+        if (state == _lockValue)
             return new ValueTask<Releaser>(new Releaser(this));
+
+        if ((state & _disposeBit) != 0)
+        {
+            _state.Add(-_lockValue);
+            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+        }
 
         return LockSlow(cancellationToken);
     }
@@ -115,12 +123,17 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<Releaser> Lock()
     {
-        if ((_state.Value & _disposeBit) != 0)
-            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
-
-        // Fast path: free (0) -> held (1)
-        if (_state.TrySet(_lockBit, _availableNoWaiters))
+        // Fast path: free -> held
+        var state = _state.Add(_lockValue);
+        
+        if (state == _lockValue)
             return new ValueTask<Releaser>(new Releaser(this));
+        
+        if ((state & _disposeBit) != 0)
+        {
+            _state.Add(-_lockValue);
+            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+        }
 
         return LockSlowNoToken();
     }
@@ -128,49 +141,16 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ValueTask<Releaser> LockSlow(CancellationToken cancellationToken)
     {
-        // Ensure one of the following is true when the loop exits:
-        // - The lock is acquired.
-        // - The waiter count is incremented.
-        //
-        // This avoids the case where a waiter is announced on a free lock.
-        // So we either get the lock here, or Exit() knows to hand it to a waiter.
-        while (true)
-        {
-            var s = _state.Value;
-
-            // free -> held
-            if ((s & (_lockBit | _disposeBit)) == 0)
-            {
-                if (_state.TrySet(s | _lockBit, s))
-                {
-                    return new ValueTask<Releaser>(new Releaser(this));
-                }
-
-                continue;
-            }
-
-            // held -> held with +1 waiter (announced)
-            if (_state.TrySet(s + _waitersValue, s))
-                break;
-        }
-
         WaiterHandle handle;
 
         lock (_gate)
         {
-            if ((_state.Value & _disposeBit) != 0)
-            {
-                _state.Add(-_waitersValue); // undo announce
-                return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                _state.Add(-_waitersValue); // undo announce
-                return ValueTask.FromCanceled<Releaser>(cancellationToken);
-            }
-            
             ClaimWaiter(out handle);
+        }
+        
+        if ((_state.Value & _disposeBit) != 0)
+        {
+            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
         }
 
         return handle.NewValueTask(cancellationToken);
@@ -179,38 +159,16 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.NoInlining)]
     private ValueTask<Releaser> LockSlowNoToken()
     {
-        // See notes in LockSlow()
-
-        while (true)
-        {
-            var s = _state.Value;
-
-            // free -> held
-            if ((s & (_lockBit | _disposeBit)) == 0)
-            {
-                if (_state.TrySet(s | _lockBit, s))
-                {
-                    return new ValueTask<Releaser>(new Releaser(this));
-                }
-
-                continue;
-            }
-
-            if (_state.TrySet(s + _waitersValue, s))
-                break;
-        }
-
         WaiterHandle handle;
 
         lock (_gate)
         {
-            if ((_state.Value & _disposeBit) != 0)
-            {
-                _state.Add(-_waitersValue);
-                return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
-            }
-
             ClaimWaiter(out handle);
+        }
+        
+        if ((_state.Value & _disposeBit) != 0)
+        {
+            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
         }
 
         return handle.NewValueTask();
@@ -219,7 +177,7 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryLock(out Releaser releaser)
     {
-        if (_state.TrySet(_lockBit, _availableNoWaiters))
+        if (_state.TrySet(_lockValue, _availableNoWaiters))
         {
             releaser = new Releaser(this);
             return true;
@@ -232,14 +190,22 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Releaser LockSync(CancellationToken cancellationToken = default)
     {
-        if ((_state.Value & _disposeBit) != 0)
-            throw new ObjectDisposedException(nameof(AsyncLock));
+        if (cancellationToken.IsCancellationRequested)
+        {
+            if ((_state.Value & _disposeBit) != 0)
+                throw new ObjectDisposedException(nameof(AsyncLock));
+            
+            throw new OperationCanceledException(cancellationToken);
+        }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        // Fast path: free -> held
+        var state = _state.Add(_lockValue);
 
-        // Fast path: free (0) -> held (1)
-        if (_state.TrySet(_lockBit, _availableNoWaiters))
+        if (state == _lockValue)
             return new Releaser(this);
+        
+        if ((state & _disposeBit) != 0)
+            throw new ObjectDisposedException(nameof(AsyncLock));
 
         return LockSyncSlow(cancellationToken);
     }
@@ -247,43 +213,16 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.NoInlining)]
     private Releaser LockSyncSlow(CancellationToken cancellationToken)
     {
-        // See notes in LockSlow()
-
-        while (true)
-        {
-            var s = _state.Value;
-            
-            if ((s & (_lockBit | _disposeBit)) == 0)
-            {
-                if (_state.TrySet(s | _lockBit, s))
-                {
-                    return new Releaser(this);
-                }
-
-                continue;
-            }
-            
-            if (_state.TrySet(s + _waitersValue, s))
-                break;
-        }
-
         WaiterHandle handle;
 
         lock (_gate)
         {
-            if ((_state.Value & _disposeBit) != 0)
-            {
-                _state.Add(-_waitersValue);
-                throw new ObjectDisposedException(nameof(AsyncLock));
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-            {
-                _state.Add(-_waitersValue);
-                throw new OperationCanceledException(cancellationToken);
-            }
-
             ClaimWaiter(out handle);
+        }
+        
+        if ((_state.Value & _disposeBit) != 0)
+        {
+            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
         }
 
         return handle.NewValueTask(cancellationToken).AsTask().GetAwaiter().GetResult();
@@ -295,32 +234,18 @@ public sealed class AsyncLock : IAsyncLock
         // Assumption: If this lock is implemented correctly, there should never be
         // a race to release the lock, since there should only ever be one owner.
 
-        while (true)
+        if (_state.Add(-_lockValue) is var state and < _lockValue)
         {
-            var s = _state.Value;
-
-            // If there are waiters, take the slow path
-            if ((s & ~(_lockBit | _disposeBit)) != 0)
-                break;
-
-            // Fast path: held (1) -> free (0), no waiters announced
-            if (_state.TrySet(s & ~_lockBit, s))
+            if ((state & _disposeBit) != 0)
             {
-                // It's possible for the lock to be reacquired very quickly,
-                // so make sure to only complete the dispose waiter if the lock is free.
-                if ((_state.Value & (_lockBit | _disposeBit)) == _disposeBit)
+                lock (_gate)
                 {
-                    // _disposeWaiter must be checked/completed under _gate,
-                    // otherwise DisposeAsync() can create it under the lock and we can miss it.
-                    lock (_gate)
-                    {
-                        _disposeWaiter?.TrySetResult();
-                        _disposeWaiter = null;
-                    }
+                    _disposeWaiter?.TrySetResult();
+                    _disposeWaiter = null;
                 }
-
-                return;
             }
+
+            return;
         }
 
         // Slow path: waiters announced
@@ -344,7 +269,6 @@ public sealed class AsyncLock : IAsyncLock
                     // spare waiter in the queue. In this instance, it is okay to complete the
                     // waiter without pushing another. There will not be another call to Exit()
                     // until the Lock method completes and maintains the queue invariant.
-                    _state.Add(-_waitersValue);
                     
                     if ((_state.Value & _disposeBit) != 0)
                     {
@@ -361,7 +285,6 @@ public sealed class AsyncLock : IAsyncLock
                 }
 
                 handle = NextWaiter();
-                _state.Add(-_waitersValue);
             }
 
             if ((_state.Value & _disposeBit) != 0)
@@ -370,7 +293,6 @@ public sealed class AsyncLock : IAsyncLock
                 // Dispose() took care of the other waiters, so just fault the one we have
                 // here and then clean up.
                 handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
-                _state.Value = _disposeBit;
                 
                 lock (_gate)
                 {
@@ -396,10 +318,15 @@ public sealed class AsyncLock : IAsyncLock
         
         lock (_gate)
         {
-            if ((_state.Or(_disposeBit) & _disposeBit) != 0) return;
+            var state = _state.Exchange(_disposeBit + _lockValue);
 
-            // Clear waiter count
-            _state.And(_lockBit | _disposeBit);
+            if ((state & _disposeBit) != 0)
+                return;
+
+            if (state != _availableNoWaiters)
+            {
+                _disposeWaiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
 
             // Take the entire queue, leave behind the spare waiter
             // to maintain the queue invariant.
@@ -422,14 +349,7 @@ public sealed class AsyncLock : IAsyncLock
 
         lock (_gate)
         {
-            // If held, create the task to wait for the lock to be free, on the next call to Exit()
-            if ((_state.Value & _lockBit) != 0)
-            {
-                _disposeWaiter ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                return new ValueTask(_disposeWaiter.Task);
-            }
+            return _disposeWaiter is null ? ValueTask.CompletedTask : new ValueTask(_disposeWaiter.Task);
         }
-        
-        return ValueTask.CompletedTask;
     }
 }
