@@ -17,16 +17,12 @@ public sealed class AsyncLock : IAsyncLock
     /// <summary>
     /// State encoding:
     /// - bit0: dispose flag (0 = in use, 1 = disposed)
-    /// - bits1..: acquire count * 2 (including current holder, so we can add/subtract 2 per waiter while preserving bit0)
+    /// - bits1..: acquire count * 2 (including current holder, so we can add/subtract 2 per acquire while preserving bit0)
     /// 
-    /// This information is encoded in a single value so that checking if the lock is free,
-    /// not disposed, and there are no waiters can all happen in a single CAS for the fast path.
+    /// This information is encoded in a single value so that locking or adding a waiter
+    /// while checking if disposed can all happen in a single fetch-and-add (FAA) operation.
     /// </summary>
     private ValueAtomicInt _state;
-
-    // Faster to use than Lock currently in .NET 10
-    // ReSharper disable once ChangeFieldTypeToSystemThreadingLock
-    private readonly object _gate = new();
 
     // Invariant: Queue always contains a spare waiter for the next contended lock access.
     private WaiterHandle _waiterQueueHead;
@@ -34,64 +30,28 @@ public sealed class AsyncLock : IAsyncLock
 
     // Used by DisposeAsync() to wait until the lock becomes free after Dispose() has been called.
     // Must only be accessed under _gate to avoid races.
-    private TaskCompletionSource? _disposeWaiter;
+    private readonly TaskCompletionSource _disposeWaiter = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // Initialize queue with the spare waiter
     public AsyncLock() => _waiterQueueHead = _waiterQueueTail = Waiter.Rent();
 
-    // Used in Lock methods when handing out a waiter to a consumer.
-    // Assumes gate lock is held.
+    // Used in Lock methods to claim a waiter for contended lock access
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ClaimWaiter(out WaiterHandle handle)
     {
         // Claim the current spare waiter and push a new one
-        handle = _waiterQueueTail;
-        _waiterQueueTail = handle.Next = Waiter.Rent();
-
-        if (handle.Processed)
+        var newSpare = Waiter.Rent();
+        handle = Interlocked.Exchange(ref _waiterQueueTail, newSpare);
+        handle.Next = newSpare;
+        
+        if (handle.Process())
         {
             // If the waiter has already been completed (in Exit()), then it is safe
-            // to assume the handle is at the head of the queue.
-            _waiterQueueHead = _waiterQueueHead.Next!;
-            handle.Next = null;
+            // to assume the handle is at the head of the queue. It is also now our
+            // responsibility to pop the queue. However, we might be racing with
+            // Dispose() or Exit(), so only pop the queue if the head is our waiter.
+            Interlocked.CompareExchange(ref _waiterQueueHead, newSpare, handle);
         }
-        else
-        {
-            handle.Processed = true;
-        }
-    }
-
-    // Remove the head of the queue.
-    // Assumes gate lock is held.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void PopWaiter()
-    {
-        var handle = _waiterQueueHead;
-        _waiterQueueHead = handle.Next!;
-        handle.Next = null;
-    }
-
-    // Returns the head of the queue.
-    // Used in Exit() when handing over control of the lock.
-    // Assumes gate lock is held.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private WaiterHandle NextWaiter()
-    {
-        var handle = _waiterQueueHead;
-
-        // If the waiter has already been claimed, pop the queue.
-        // Otherwise, leave the waiter in the queue. The active Lock method will claim
-        // it and take responsibility for popping the queue.
-        if (handle.Processed)
-        {
-            PopWaiter();
-        }
-        else
-        {
-            handle.Processed = true;
-        }
-
-        return handle;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -99,72 +59,69 @@ public sealed class AsyncLock : IAsyncLock
     {
         if (cancellationToken.IsCancellationRequested)
         {
+            // Disposal takes precedence over cancellation
             if ((_state.Value & _disposeBit) != 0)
                 return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
             
             return ValueTask.FromCanceled<Releaser>(cancellationToken);
         }
-
-        // Fast path: free -> held
+        
         var state = _state.Add(_lockValue);
         
+        // Fast path: free -> held
         if (state == _lockValue)
             return new ValueTask<Releaser>(new Releaser(this));
-
-        if ((state & _disposeBit) != 0)
-        {
-            _state.Add(-_lockValue);
-            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
-        }
-
-        return LockSlow(cancellationToken);
+        
+        // Slow path: The lock is already held or the lock is disposed
+        return LockSlow(state, cancellationToken);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<Releaser> Lock()
     {
-        // Fast path: free -> held
+        // See notes in Lock(CancellationToken)
         var state = _state.Add(_lockValue);
-        
+
         if (state == _lockValue)
             return new ValueTask<Releaser>(new Releaser(this));
+
+        return LockSlowNoToken(state);
+    }
+    
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ValueTask<Releaser> LockSlow(int state, CancellationToken cancellationToken)
+    {
+        if ((state & _disposeBit) != 0)
+        {
+            // The only value to unannouncing our waiter is to make it more likely for the
+            // remaining Exit() to take the fast path.
+            _state.Add(-_lockValue);
+            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+        }
         
+        ClaimWaiter(out var handle);
+        
+        // Catch the case where disposal occurred between incrementing the
+        // acquire count and claiming a waiter.
+        if ((_state.Value & _disposeBit) != 0)
+        {
+            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
+        }
+        
+        return handle.NewValueTask(cancellationToken);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ValueTask<Releaser> LockSlowNoToken(int state)
+    {
+        // See notes in LockSlow(CancellationToken)
         if ((state & _disposeBit) != 0)
         {
             _state.Add(-_lockValue);
             return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
         }
-
-        return LockSlowNoToken();
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private ValueTask<Releaser> LockSlow(CancellationToken cancellationToken)
-    {
-        WaiterHandle handle;
-
-        lock (_gate)
-        {
-            ClaimWaiter(out handle);
-        }
         
-        if ((_state.Value & _disposeBit) != 0)
-        {
-            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
-        }
-
-        return handle.NewValueTask(cancellationToken);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private ValueTask<Releaser> LockSlowNoToken()
-    {
-        WaiterHandle handle;
-
-        lock (_gate)
-        {
-            ClaimWaiter(out handle);
-        }
+        ClaimWaiter(out var handle);
         
         if ((_state.Value & _disposeBit) != 0)
         {
@@ -190,6 +147,7 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Releaser LockSync(CancellationToken cancellationToken = default)
     {
+        // See notes in Lock(CancellationToken)
         if (cancellationToken.IsCancellationRequested)
         {
             if ((_state.Value & _disposeBit) != 0)
@@ -197,28 +155,26 @@ public sealed class AsyncLock : IAsyncLock
             
             throw new OperationCanceledException(cancellationToken);
         }
-
-        // Fast path: free -> held
+        
         var state = _state.Add(_lockValue);
 
         if (state == _lockValue)
             return new Releaser(this);
         
-        if ((state & _disposeBit) != 0)
-            throw new ObjectDisposedException(nameof(AsyncLock));
-
-        return LockSyncSlow(cancellationToken);
+        return LockSyncSlow(state, cancellationToken);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private Releaser LockSyncSlow(CancellationToken cancellationToken)
+    private Releaser LockSyncSlow(int state, CancellationToken cancellationToken)
     {
-        WaiterHandle handle;
-
-        lock (_gate)
+        // See notes in LockSlow(CancellationToken)
+        if ((state & _disposeBit) != 0)
         {
-            ClaimWaiter(out handle);
+            _state.Add(-_lockValue);
+            throw new ObjectDisposedException(nameof(AsyncLock));
         }
+
+        ClaimWaiter(out var handle);
         
         if ((_state.Value & _disposeBit) != 0)
         {
@@ -231,125 +187,116 @@ public sealed class AsyncLock : IAsyncLock
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Exit()
     {
-        // Assumption: If this lock is implemented correctly, there should never be
-        // a race to release the lock, since there should only ever be one owner.
-
-        if (_state.Add(-_lockValue) is var state and < _lockValue)
-        {
-            if ((state & _disposeBit) != 0)
-            {
-                lock (_gate)
-                {
-                    _disposeWaiter?.TrySetResult();
-                    _disposeWaiter = null;
-                }
-            }
-
-            return;
-        }
-
-        // Slow path: waiters announced
         while (true)
         {
-            WaiterHandle handle;
-            var pop = false;
-
-            lock (_gate)
+            // Fast path: Lock released with no announced waiters
+            if (_state.Add(-_lockValue) is var state and < _lockValue)
             {
-                if (pop)
+                if ((state & _disposeBit) != 0)
                 {
-                    // The head of the queue was already completed.
-                    PopWaiter();
-                    pop = false;
-                }
-                
-                if (_waiterQueueHead.Next is null)
-                {
-                    // A Lock method has announced a waiter, but has not yet claimed the
-                    // spare waiter in the queue. In this instance, it is okay to complete the
-                    // waiter without pushing another. There will not be another call to Exit()
-                    // until the Lock method completes and maintains the queue invariant.
-                    
-                    if ((_state.Value & _disposeBit) != 0)
-                    {
-                        _disposeWaiter?.TrySetResult();
-                        _disposeWaiter = null;
-                    }
-                    else
-                    {
-                        _waiterQueueHead.Processed = true;
-                        _waiterQueueHead.TryGrant(new Releaser(this));
-                    }
-
-                    return;
-                }
-
-                handle = NextWaiter();
-            }
-
-            if ((_state.Value & _disposeBit) != 0)
-            {
-                // No longer transferring ownership of lock.
-                // Dispose() took care of the other waiters, so just fault the one we have
-                // here and then clean up.
-                handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
-                
-                lock (_gate)
-                {
-                    _disposeWaiter?.TrySetResult();
-                    _disposeWaiter = null;
+                    _disposeWaiter.TrySetResult();
                 }
 
                 return;
             }
 
-            // Try to hand the lock over to the next waiter
-            if (handle.TryGrant(new Releaser(this))) return;
-            
-            // If the waiter is already completed, then it is safe to assume it
-            // was already claimed by a call to a Lock() method.
-            pop = true;
+            // Slow path: waiters announced
+            while (true)
+            {
+                var head = Volatile.Read(ref _waiterQueueHead);
+
+                if ((_state.Value & _disposeBit) != 0)
+                {
+                    _disposeWaiter.TrySetResult();
+                    return;
+                }
+                
+                if (head.TryGrant(new Releaser(this)))
+                {
+                    if (head.Process())
+                    {
+                        // The waiter has already been claimed by a Lock() method, so it is our
+                        // responsibility to pop the queue. However, we might be racing with
+                        // Dispose() or the previous call to Exit(), so only pop the queue
+                        // if the head is our waiter.
+                        Interlocked.CompareExchange(ref _waiterQueueHead, head.Next!, head);
+                    }
+                    // else: The waiter has been announced, but not yet claimed by a Lock() method.
+                    // In this case, it is okay to leave the waiter in the queue. There will
+                    // not be another call to Exit() until the Lock() method completes and
+                    // maintains the queue invariant.
+
+                    return;
+                }
+
+                if (head.Next is not null)
+                { 
+                    // If we could not transfer the lock and the waiter is linked,
+                    // then one of three things happened:
+                    // - The waiter was canceled.
+                    // - The lock was disposed.
+                    // - The previous owner of the lock has not yet popped the queue.
+                    // We will pop the queue and try to transfer the lock again. However, we might
+                    // be racing with Dispose() or the previous call to Exit(), so only pop the
+                    // queue if the head is our waiter.
+                    Interlocked.CompareExchange(ref _waiterQueueHead, head.Next, head);
+
+                    // Whether to break or continue determines whether the acquire count is decremented
+                    // before trying again. If the handle was granted the lock, then we do not want
+                    // to decrement again, or a waiter will be lost.
+                    if (head.IsGranted)
+                        continue;
+
+                    break;
+                }
+
+                // If we could not transfer the lock and the waiter is not linked,
+                // then it must have been disposed.
+                _disposeWaiter.TrySetResult();
+                return;
+            }
         }
     }
 
     public void Dispose()
     {
-        WaiterHandle handle;
+        // Set the lock state to disposed with lock taken, regardless of whether the lock
+        // is actually held. If the lock is free, then there is no more work to do. If
+        // the lock is held, then the count of any waiters is cleared.
+        var state = _state.Exchange(_disposeBit + _lockValue);
         
-        lock (_gate)
+        if ((state & _disposeBit) != 0)
+            return;
+
+        // If we disposed a free lock, then complete the dispose task
+        if (state == _availableNoWaiters)
         {
-            var state = _state.Exchange(_disposeBit + _lockValue);
-
-            if ((state & _disposeBit) != 0)
-                return;
-
-            if (state != _availableNoWaiters)
-            {
-                _disposeWaiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
-
-            // Take the entire queue, leave behind the spare waiter
-            // to maintain the queue invariant.
-            handle = _waiterQueueHead;
-            _waiterQueueHead = _waiterQueueTail;
+            _disposeWaiter.TrySetResult();
+            return;
         }
+
+        // Take the entire queue, leave behind the spare waiter to maintain the queue invariant.
+        // It's ok if a Lock() method is racing to add a waiter, it will eventually check the
+        // dispose bit and fault the waiter. At worst, any racing Lock() method might leave an
+        // unused waiter, which will become eligible for garbage collection along with the lock.
+        var tail = Volatile.Read(ref _waiterQueueTail);
+        var handle = Interlocked.Exchange(ref _waiterQueueHead, tail);
         
         // Fault each waiter
         var ode = new ObjectDisposedException(nameof(AsyncLock));
-        while (handle.Next is not null)
+        while (handle != tail)
         {
             handle.TrySetException(ode);
             handle = handle.Next;
+
+            if (handle is null)
+                break;
         }
     }
 
     public ValueTask DisposeAsync()
     {
         Dispose();
-
-        lock (_gate)
-        {
-            return _disposeWaiter is null ? ValueTask.CompletedTask : new ValueTask(_disposeWaiter.Task);
-        }
+        return new ValueTask(_disposeWaiter.Task);
     }
 }
