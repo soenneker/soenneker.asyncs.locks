@@ -29,7 +29,6 @@ public sealed class AsyncLock : IAsyncLock
     private WaiterHandle _waiterQueueTail;
 
     // Used by DisposeAsync() to wait until the lock becomes free after Dispose() has been called.
-    // Must only be accessed under _gate to avoid races.
     private readonly TaskCompletionSource _disposeWaiter = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     // Initialize queue with the spare waiter
@@ -66,9 +65,10 @@ public sealed class AsyncLock : IAsyncLock
             return ValueTask.FromCanceled<Releaser>(cancellationToken);
         }
         
+        // If the lock is held, this will have the effect of announcing a waiter
         var state = _state.Add(_lockValue);
         
-        // Fast path: free -> held
+        // Fast path: free -> held, no waiters, not disposed
         if (state == _lockValue)
             return new ValueTask<Releaser>(new Releaser(this));
         
@@ -222,9 +222,8 @@ public sealed class AsyncLock : IAsyncLock
                         Interlocked.CompareExchange(ref _waiterQueueHead, head.Next!, head);
                     }
                     // else: The waiter has been announced, but not yet claimed by a Lock() method.
-                    // In this case, it is okay to leave the waiter in the queue. There will
-                    // not be another call to Exit() until the Lock() method completes and
-                    // maintains the queue invariant.
+                    // Leave the waiter in the queue, and the Lock() method which claims it will
+                    // take the responsibility of popping the queue.
 
                     return;
                 }
@@ -240,10 +239,9 @@ public sealed class AsyncLock : IAsyncLock
                     // be racing with Dispose() or the previous call to Exit(), so only pop the
                     // queue if the head is our waiter.
                     Interlocked.CompareExchange(ref _waiterQueueHead, head.Next, head);
-
-                    // Whether to break or continue determines whether the acquire count is decremented
-                    // before trying again. If the handle was granted the lock, then we do not want
-                    // to decrement again, or a waiter will be lost.
+                    
+                    // If the handle was granted the lock (in the previous call to Exit()), then we
+                    // do not want to decrement the acquire count again, or a waiter will be lost.
                     if (head.IsGranted)
                         continue;
 
@@ -260,7 +258,7 @@ public sealed class AsyncLock : IAsyncLock
 
     public void Dispose()
     {
-        // Set the lock state to disposed with lock taken, regardless of whether the lock
+        // Set the lock state to disposed with one owner, regardless of whether the lock
         // is actually held. If the lock is free, then there is no more work to do. If
         // the lock is held, then the count of any waiters is cleared.
         var state = _state.Exchange(_disposeBit + _lockValue);

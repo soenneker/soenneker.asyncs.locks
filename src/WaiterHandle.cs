@@ -22,9 +22,9 @@ internal sealed class WaiterHandle(Waiter waiter, short version)
     ///     The grant bit is set when this waiter receives ownership of the lock. It is used
     ///     to prevent the lock from decrementing the acquire count multiple times for a single
     ///     waiter, and thus losing a waiter. This could happen if the new lock owner calls
-    ///     Exit() before the previous owner had finished the call to Exit().
+    ///     Exit() before the previous call to Exit() pops the queue.
     /// - bit1..2: Processed counter (Incremented when claimed in Lock() and processed in Exit())
-    ///     The waiter must be claimed by a Lock method and also processed in the Exit()
+    ///     The waiter must be claimed by a Lock() method and also processed in the Exit()
     ///     function to be removed from the queue. The processed bits track when one of those has
     ///     happened so that the other knows it is time to pop the queue.
     /// </summary>
@@ -33,13 +33,13 @@ internal sealed class WaiterHandle(Waiter waiter, short version)
     // Pointer for waiter queue (singly-linked list)
     public volatile WaiterHandle? Next;
 
-    // The version allows this handle to become stale once the waiter task has been consumed
+    // The version allows this handle to become stale once the waiter task has been completed
     public short Version { get; } = version;
 
     public bool IsGranted => (_state.Value & _grantBit) != 0;
     
     // Function called when a Lock() method claims the lock and when taking ownership
-    // in the Exit() function. Will return true for the second caller, who takes on the
+    // in the Exit() function. Returns true for the second caller, who takes on the
     // responsibility of popping the queue.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Process() => _state.Add(_processedBit) >= _processedBit * 2;

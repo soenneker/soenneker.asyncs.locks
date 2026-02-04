@@ -82,7 +82,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>
     }
 
     // Ensures that the waiter can only be completed once per version,
-    // and that handles to previous versions become stale.
+    // and handles to previous versions become stale.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryComplete(short version)
     {
