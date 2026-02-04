@@ -46,7 +46,7 @@ public class LockSyncBenchmark
     [Benchmark(Description = "NExtensions.Async.AsyncLock (sync)")]
     public void NExtensionsSync()
     {
-        using var releaser = _nextensionsLock.EnterScopeAsync().GetAwaiter().GetResult();
+        using NExtensionsAsyncLock.Releaser releaser = _nextensionsLock.EnterScopeAsync().GetAwaiter().GetResult();
     }
 
     [Benchmark(Description = "SemaphoreSlim (sync)")]

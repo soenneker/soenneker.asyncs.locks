@@ -38,17 +38,17 @@ public class LockBenchmark
         using Releaser releaser = await _soennekerLock.Lock().ConfigureAwait(false);
     }
 
-    [Benchmark(Description = "Nito.AsyncEx.AsyncLock")]
-    public async ValueTask NitoAsync()
-    {
-        using IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
-    }
+    //[Benchmark(Description = "Nito.AsyncEx.AsyncLock")]
+    //public async ValueTask NitoAsync()
+    //{
+    //    using IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
+    //}
 
-    [Benchmark(Description = "NExtensions.Async.AsyncLock")]
-    public async ValueTask NExtensionsAsync()
-    {
-        using var releaser = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
-    }
+    //[Benchmark(Description = "NExtensions.Async.AsyncLock")]
+    //public async ValueTask NExtensionsAsync()
+    //{
+    //    using NExtensionsAsyncLock.Releaser releaser = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
+    //}
 
     [Benchmark(Description = "SemaphoreSlim")]
     public async ValueTask SemaphoreSlimAsync()

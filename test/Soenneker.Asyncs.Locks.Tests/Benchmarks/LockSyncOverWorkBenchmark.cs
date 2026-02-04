@@ -1,5 +1,4 @@
 using BenchmarkDotNet.Attributes;
-using System;
 using System.Threading;
 using NExtensionsAsyncLock = NExtensions.Async.AsyncLock;
 using NitoAsyncLock = Nito.AsyncEx.AsyncLock;
