@@ -1,8 +1,8 @@
-﻿using BenchmarkDotNet.Attributes;
-using Nito.AsyncEx;
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+using BenchmarkDotNet.Attributes;
+using Nito.AsyncEx;
 using NExtensionsAsyncLock = NExtensions.Async.AsyncLock;
 using NitoAsyncLock = Nito.AsyncEx.AsyncLock;
 using SoennekerAsyncLock = Soenneker.Asyncs.Locks.AsyncLock;
@@ -12,8 +12,6 @@ namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
 [MemoryDiagnoser]
 public class LockContendBenchmark
 {
-    // NOTE: I'm not even sure if this is a valuable benchmark to have
-    
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
     private NExtensionsAsyncLock _nextensionsLock = null!;
