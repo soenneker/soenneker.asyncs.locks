@@ -1,6 +1,7 @@
-﻿[![](https://img.shields.io/nuget/v/soenneker.asyncs.locks.svg?style=for-the-badge)](https://www.nuget.org/packages/soenneker.asyncs.locks/)
+[![](https://img.shields.io/nuget/v/soenneker.asyncs.locks.svg?style=for-the-badge)](https://www.nuget.org/packages/soenneker.asyncs.locks/)
 [![](https://img.shields.io/github/actions/workflow/status/soenneker/soenneker.asyncs.locks/publish-package.yml?style=for-the-badge)](https://github.com/soenneker/soenneker.asyncs.locks/actions/workflows/publish-package.yml)
 [![](https://img.shields.io/nuget/dt/soenneker.asyncs.locks.svg?style=for-the-badge)](https://www.nuget.org/packages/soenneker.asyncs.locks/)
+[![](https://img.shields.io/github/actions/workflow/status/soenneker/soenneker.asyncs.locks/codeql.yml?label=CodeQL&style=for-the-badge)](https://github.com/soenneker/soenneker.asyncs.locks/actions/workflows/codeql.yml)
 
 # Soenneker.Asyncs.Locks
 ### The fastest .NET async lock
@@ -16,7 +17,7 @@ It provides the following guarantees:
 #### Cancellation-safe
 
 - Fully supports cancellation before acquisition and while waiting for both async and sync callers.  
-- Cancelled waiters are removed immediately, never resumed, and never leaked — with **zero impact on the fast path**.
+- Cancelled waiters are removed immediately, never resumed, and never leaked � with **zero impact on the fast path**.
 
 #### Unified async + sync locking
 
