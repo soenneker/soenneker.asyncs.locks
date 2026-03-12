@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -20,7 +20,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\src\Soenneker.Asyncs.Locks.csproj" />
+        <ProjectReference Include="..\..\src\Soenneker.Asyncs.Locks\Soenneker.Asyncs.Locks.csproj" />
     </ItemGroup>
 
     <ItemGroup>
