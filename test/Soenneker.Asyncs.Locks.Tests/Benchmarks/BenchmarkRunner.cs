@@ -1,21 +1,20 @@
 using System.Threading.Tasks;
 using BenchmarkDotNet.Reports;
 using Soenneker.Benchmarking.Extensions.Summary;
-using Soenneker.Facts.Local;
+using Soenneker.Tests.Attributes.Local;
 using Soenneker.Facts.Manual;
 using Soenneker.Tests.Benchmark;
-using Xunit;
 
 namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
 
 public class BenchmarkRunner : BenchmarkTest
 {
-    public BenchmarkRunner(ITestOutputHelper outputHelper) : base(outputHelper)
+    public BenchmarkRunner() : base()
     {
     }
 
     //[ManualFact]
-    // [LocalFact]
+    // [LocalOnly]
     public async ValueTask Lock()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<LockBenchmark>(DefaultConf);
@@ -24,7 +23,7 @@ public class BenchmarkRunner : BenchmarkTest
     }
 
     //[ManualFact]
-    // [LocalFact]
+    // [LocalOnly]
     public async ValueTask LockSingleWaiterHandoff()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<SingleWaiterHandoffBenchmark>(DefaultConf);
@@ -32,7 +31,7 @@ public class BenchmarkRunner : BenchmarkTest
     }
 
     //[ManualFact]
-    // [LocalFact]
+    // [LocalOnly]
     public async ValueTask LockThroughputContention()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<ThroughputContentionBenchmark>(DefaultConf);
@@ -40,7 +39,7 @@ public class BenchmarkRunner : BenchmarkTest
     }
 
     //[ManualFact]
-    //   [LocalFact]
+    //   [LocalOnly]
     public async ValueTask LockHoldTimeContention()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<HoldTimeContentionBenchmark>(DefaultConf);
@@ -48,7 +47,7 @@ public class BenchmarkRunner : BenchmarkTest
     }
 
     //[ManualFact]
-    //  [LocalFact]
+    //  [LocalOnly]
     public async ValueTask LockOverWork()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<LockOverWorkBenchmark>(DefaultConf);
@@ -57,7 +56,7 @@ public class BenchmarkRunner : BenchmarkTest
     }
 
     // [ManualFact]
-    //  [LocalFact]
+    //  [LocalOnly]
     public async ValueTask LockSync()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<LockSyncBenchmark>(DefaultConf);
@@ -66,7 +65,7 @@ public class BenchmarkRunner : BenchmarkTest
     }
 
     [ManualFact]
-    // [LocalFact]
+    // [LocalOnly]
     public async ValueTask LockSyncOverWork()
     {
         Summary summary = BenchmarkDotNet.Running.BenchmarkRunner.Run<LockSyncOverWorkBenchmark>(DefaultConf);

@@ -6,11 +6,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using AwesomeAssertions;
 using AwesomeAssertions.Specialized;
-using Xunit;
 
 namespace Soenneker.Asyncs.Locks.Tests;
 
-[Collection("Collection")]
+[ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
 public sealed class AsyncLockTests
 {
     private static CancellationToken TestToken => TestContext.Current.CancellationToken;
@@ -28,21 +27,21 @@ public sealed class AsyncLockTests
     private static TaskCompletionSource<bool> NewTcs() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    [Fact]
+    [Test]
     public async Task LockAsync_Uncontended_AcquiresImmediately()
     {
         await using var asyncLock = new AsyncLock();
         using Releaser releaser = await asyncLock.Lock(TestToken);
     }
 
-    [Fact]
+    [Test]
     public void LockSync_Uncontended_AcquiresImmediately()
     {
         using var asyncLock = new AsyncLock();
         using Releaser releaser = asyncLock.LockSync(TestToken);
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_Contended_WaitsForRelease()
     {
         await using var asyncLock = new AsyncLock();
@@ -57,7 +56,7 @@ public sealed class AsyncLockTests
         using Releaser second = await secondTask.WaitAsync(TimeoutToken());
     }
 
-    [Fact]
+    [Test]
     public void LockSync_Contended_WaitsForRelease()
     {
         using var asyncLock = new AsyncLock();
@@ -83,7 +82,7 @@ public sealed class AsyncLockTests
         secondThread.Join();
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_MultipleWaiters_ProcessesInOrder()
     {
         const int waiters = 10;
@@ -115,7 +114,7 @@ public sealed class AsyncLockTests
         results.Should().Equal([..Enumerable.Range(0, waiters)]);
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_WithCancellation_CancelsWhenRequested()
     {
         await using var asyncLock = new AsyncLock();
@@ -135,7 +134,7 @@ public sealed class AsyncLockTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_CancelVsRelease_Race_ObservesOneOutcome()
     {
         await using var asyncLock = new AsyncLock();
@@ -187,7 +186,7 @@ public sealed class AsyncLockTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_CancelVsRelease_Race_Stress_ObservesOneOutcome()
     {
         await using var asyncLock = new AsyncLock();
@@ -238,7 +237,7 @@ public sealed class AsyncLockTests
         }
     }
 
-    [Fact]
+    [Test]
     public void LockSync_WithCancellation_CancelsWhenRequested()
     {
         using var asyncLock = new AsyncLock();
@@ -275,7 +274,7 @@ public sealed class AsyncLockTests
         canceled.Should().BeTrue();
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_AlreadyCanceled_ThrowsImmediately()
     {
         await using var asyncLock = new AsyncLock();
@@ -286,7 +285,7 @@ public sealed class AsyncLockTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    [Fact]
+    [Test]
     public void LockSync_AlreadyCanceled_ThrowsImmediately()
     {
         using var asyncLock = new AsyncLock();
@@ -298,7 +297,7 @@ public sealed class AsyncLockTests
                  .Throw<OperationCanceledException>();
     }
 
-    [Fact]
+    [Test]
     public async Task Dispose_PreventsNewAcquisitions()
     {
         var asyncLock = new AsyncLock();
@@ -312,7 +311,7 @@ public sealed class AsyncLockTests
                  .Throw<ObjectDisposedException>();
     }
 
-    [Fact]
+    [Test]
     public async Task Dispose_FailsQueuedWaiters()
     {
         await using var asyncLock = new AsyncLock();
@@ -342,7 +341,7 @@ public sealed class AsyncLockTests
         await holderTask.WaitAsync(TimeoutToken());
     }
 
-    [Fact]
+    [Test]
     public async Task Dispose_ConcurrentRelease_CompletesWithValidOutcome()
     {
         for (int i = 0; i < 200; i++)
@@ -381,7 +380,7 @@ public sealed class AsyncLockTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task Dispose_ConcurrentRelease_Stress_CompletesWithValidOutcome()
     {
         for (int i = 0; i < 5000; i++)
@@ -419,7 +418,7 @@ public sealed class AsyncLockTests
         }
     }
 
-    [Fact]
+    [Test]
     public async Task Dispose_AllowsCurrentHolderToComplete()
     {
         var asyncLock = new AsyncLock();
@@ -443,7 +442,7 @@ public sealed class AsyncLockTests
         completed.IsSet.Should().BeTrue();
     }
 
-    [Fact]
+    [Test]
     public async Task DisposeAsync_WaitsForCurrentHolder()
     {
         var asyncLock = new AsyncLock();
@@ -476,7 +475,7 @@ public sealed class AsyncLockTests
         released.Should().BeTrue();
     }
 
-    [Fact]
+    [Test]
     public void Dispose_CanBeCalledMultipleTimes()
     {
         var asyncLock = new AsyncLock();
@@ -484,7 +483,7 @@ public sealed class AsyncLockTests
         asyncLock.Invoking(l => l.Dispose()).Should().NotThrow(); // Should not throw
     }
 
-    [Fact]
+    [Test]
     public async Task DisposeAsync_CanBeCalledMultipleTimes()
     {
         var asyncLock = new AsyncLock();
@@ -495,7 +494,7 @@ public sealed class AsyncLockTests
         await act2.Should().NotThrowAsync(); // Should not throw
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_MixedWithLockSync_WorksCorrectly()
     {
         await using var asyncLock = new AsyncLock();
@@ -536,7 +535,7 @@ public sealed class AsyncLockTests
         results.Skip(1).Should().BeEquivalentTo(["sync", "async2"]);
     }
 
-    [Fact]
+    [Test]
     public async Task Releaser_Dispose_ReleasesLock()
     {
         await using var asyncLock = new AsyncLock();
@@ -550,7 +549,7 @@ public sealed class AsyncLockTests
         using Releaser second = await secondTask.WaitAsync(TimeoutToken());
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_RapidAcquireRelease_WorksCorrectly()
     {
         await using var asyncLock = new AsyncLock();
@@ -575,7 +574,7 @@ public sealed class AsyncLockTests
         count.Should().Be(100);
     }
 
-    [Fact]
+    [Test]
     public void LockSync_RapidAcquireRelease_WorksCorrectly()
     {
         using var asyncLock = new AsyncLock();
@@ -603,7 +602,7 @@ public sealed class AsyncLockTests
         count.Should().Be(100);
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_AfterDispose_ThrowsObjectDisposedException()
     {
         var asyncLock = new AsyncLock();
@@ -615,7 +614,7 @@ public sealed class AsyncLockTests
         ex.And.ObjectName.Should().Be(nameof(AsyncLock));
     }
 
-    [Fact]
+    [Test]
     public void LockSync_AfterDispose_ThrowsObjectDisposedException()
     {
         var asyncLock = new AsyncLock();
@@ -628,7 +627,7 @@ public sealed class AsyncLockTests
         ex.And.ObjectName.Should().Be(nameof(AsyncLock));
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_ConcurrentDispose_HandlesGracefully()
     {
         var asyncLock = new AsyncLock();
@@ -663,7 +662,7 @@ public sealed class AsyncLockTests
         (exceptions.Count == 0 || exceptions.All(e => e is ObjectDisposedException)).Should().BeTrue();
     }
 
-    [Fact]
+    [Test]
     public async Task LockAsync_ConcurrentDispose_Stress_HandlesGracefully()
     {
         for (int i = 0; i < 500; i++)
