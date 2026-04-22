@@ -9,7 +9,6 @@ using AwesomeAssertions.Specialized;
 
 namespace Soenneker.Asyncs.Locks.Tests;
 
-[ClassDataSource<Host>(Shared = SharedType.PerTestSession)]
 public sealed class AsyncLockTests
 {
     private static CancellationToken TestToken => TestContext.Current.CancellationToken;
