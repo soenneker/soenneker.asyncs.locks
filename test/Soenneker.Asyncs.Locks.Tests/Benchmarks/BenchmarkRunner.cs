@@ -2,7 +2,6 @@ using System.Threading.Tasks;
 using BenchmarkDotNet.Reports;
 using Soenneker.Benchmarking.Extensions.Summary;
 using Soenneker.Tests.Attributes.Local;
-using Soenneker.Facts.Manual;
 using Soenneker.Tests.Benchmark;
 
 namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
@@ -13,7 +12,7 @@ public class BenchmarkRunner : BenchmarkTest
     {
     }
 
-    //[ManualFact]
+    //[Skip("Manual")]
     // [LocalOnly]
     public async ValueTask Lock()
     {
@@ -22,7 +21,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    //[ManualFact]
+    //[Skip("Manual")]
     // [LocalOnly]
     public async ValueTask LockSingleWaiterHandoff()
     {
@@ -30,7 +29,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    //[ManualFact]
+    //[Skip("Manual")]
     // [LocalOnly]
     public async ValueTask LockThroughputContention()
     {
@@ -38,7 +37,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    //[ManualFact]
+    //[Skip("Manual")]
     //   [LocalOnly]
     public async ValueTask LockHoldTimeContention()
     {
@@ -46,7 +45,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    //[ManualFact]
+    //[Skip("Manual")]
     //  [LocalOnly]
     public async ValueTask LockOverWork()
     {
@@ -55,7 +54,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    // [ManualFact]
+    // [Skip("Manual")]
     //  [LocalOnly]
     public async ValueTask LockSync()
     {
@@ -64,7 +63,7 @@ public class BenchmarkRunner : BenchmarkTest
         await summary.OutputSummaryToLog(OutputHelper, CancellationToken);
     }
 
-    [ManualFact]
+    [Skip("Manual")]
     // [LocalOnly]
     public async ValueTask LockSyncOverWork()
     {
