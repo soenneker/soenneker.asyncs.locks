@@ -11,7 +11,7 @@ namespace Soenneker.Asyncs.Locks.Tests;
 
 public sealed class AsyncLockTests
 {
-    private static CancellationToken TestToken => TestContext.Current.CancellationToken;
+    private static CancellationToken TestToken => CancellationToken.None;
 
     // Keep timeouts generous to avoid CI noise, but always bounded to prevent hangs.
     private static readonly TimeSpan _defaultTimeout = TimeSpan.FromSeconds(10);

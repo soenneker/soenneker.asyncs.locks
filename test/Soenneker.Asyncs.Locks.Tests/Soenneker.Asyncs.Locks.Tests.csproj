@@ -18,5 +18,11 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Soenneker.Asyncs.Locks\Soenneker.Asyncs.Locks.csproj" />
     </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="**/Benchmarks/**/*.cs" />
+    <Compile Remove="**/Benchmarking/**/*.cs" />
+  </ItemGroup>
 </Project>
+
+
 
