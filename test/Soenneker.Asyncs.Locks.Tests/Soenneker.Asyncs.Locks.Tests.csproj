@@ -10,9 +10,9 @@
         <PackageReference Include="AwesomeAssertions" Version="9.4.0" />
         <PackageReference Include="NExtensions.Async" Version="1.3.0" />
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
-        <PackageReference Include="Soenneker.Tests.Attributes.Local" Version="4.0.24" />
-        <PackageReference Include="Soenneker.Tests.Benchmark" Version="4.0.105" />
-        <PackageReference Include="TUnit" Version="1.47.0" />
+        <PackageReference Include="Soenneker.Tests.Attributes.Local" Version="4.0.25" />
+        <PackageReference Include="Soenneker.Tests.Benchmark" Version="4.0.107" />
+        <PackageReference Include="TUnit" Version="1.48.6" />
     </ItemGroup>
 
     <ItemGroup>
