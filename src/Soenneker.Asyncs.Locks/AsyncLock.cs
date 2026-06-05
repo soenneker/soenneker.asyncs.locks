@@ -219,6 +219,9 @@ public sealed class AsyncLock : IAsyncLock
         }
     }
 
+    /// <summary>
+    /// Releases resources used by the current instance.
+    /// </summary>
     public void Dispose()
     {
         int state = _state.Exchange(_disposeBit + _lockValue);
@@ -247,6 +250,10 @@ public sealed class AsyncLock : IAsyncLock
         }
     }
 
+    /// <summary>
+    /// Asynchronously releases resources used by the current instance.
+    /// </summary>
+    /// <returns>A task that represents the asynchronous operation.</returns>
     public ValueTask DisposeAsync()
     {
         Dispose();
