@@ -12,7 +12,7 @@
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
         <PackageReference Include="Soenneker.Tests.Attributes.Local" Version="4.0.59" />
         <PackageReference Include="Soenneker.Tests.Benchmark" Version="4.0.129" />
-        <PackageReference Include="TUnit" Version="1.61.23" />
+        <PackageReference Include="TUnit" Version="1.61.29" />
     </ItemGroup>
 
     <ItemGroup>
