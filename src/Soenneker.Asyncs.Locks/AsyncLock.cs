@@ -27,7 +27,7 @@ public sealed class AsyncLock : IAsyncLock
     // - single consumer (Exit) dequeues waiter nodes
     private ValueIntrusiveMpscQueue<WaiterHandle> _waiterQueue;
 
-    private readonly TaskCompletionSource _disposeWaiter = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource? _disposeWaiter;
 
     public AsyncLock()
     {
@@ -194,14 +194,14 @@ public sealed class AsyncLock : IAsyncLock
             if (state < _lockValue)
             {
                 if ((state & _disposeBit) != 0)
-                    _disposeWaiter.TrySetResult();
+                    Volatile.Read(ref _disposeWaiter)?.TrySetResult();
 
                 return;
             }
 
             if ((_state.Value & _disposeBit) != 0)
             {
-                _disposeWaiter.TrySetResult();
+                Volatile.Read(ref _disposeWaiter)?.TrySetResult();
                 return;
             }
 
@@ -231,7 +231,8 @@ public sealed class AsyncLock : IAsyncLock
 
         if (state == _availableNoWaiters)
         {
-            _disposeWaiter.TrySetResult();
+            _state.Exchange(_disposeBit);
+            Volatile.Read(ref _disposeWaiter)?.TrySetResult();
             return;
         }
 
@@ -256,7 +257,26 @@ public sealed class AsyncLock : IAsyncLock
     /// <returns>A task that represents the asynchronous operation.</returns>
     public ValueTask DisposeAsync()
     {
+        if (_state.Value == _disposeBit)
+            return ValueTask.CompletedTask;
+
+        TaskCompletionSource waiter = GetDisposeWaiter();
         Dispose();
-        return new ValueTask(_disposeWaiter.Task);
+
+        if (_state.Value == _disposeBit)
+            waiter.TrySetResult();
+
+        return new ValueTask(waiter.Task);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private TaskCompletionSource GetDisposeWaiter()
+    {
+        TaskCompletionSource? waiter = Volatile.Read(ref _disposeWaiter);
+        if (waiter is not null)
+            return waiter;
+
+        var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return Interlocked.CompareExchange(ref _disposeWaiter, created, null) ?? created;
     }
 }
