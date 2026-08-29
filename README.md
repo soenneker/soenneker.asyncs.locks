@@ -4,34 +4,10 @@
 [![](https://img.shields.io/github/actions/workflow/status/soenneker/soenneker.asyncs.locks/codeql.yml?label=CodeQL&style=for-the-badge)](https://github.com/soenneker/soenneker.asyncs.locks/actions/workflows/codeql.yml)
 
 # Soenneker.Asyncs.Locks
-### The fastest .NET async lock
 
-This library provides a single primitive: `AsyncLock`.
+A low-allocation mutex shared by asynchronous and synchronous callers.
 
-### Design goal
-
-`AsyncLock` is built to be the **fastest possible correct mutex** for real-world .NET systems.
-
-It provides the following guarantees:
-
-#### Cancellation-safe
-
-- Fully supports cancellation before acquisition and while waiting for both async and sync callers.  
-- Cancelled waiters are removed immediately, never resumed, and never leaked — with **zero impact on the fast path**.
-
-#### Unified async + sync locking
-
-- Async and synchronous callers share the *same mutex*.  
-- Ordering is preserved without adapters, wrappers, or duplicated synchronization primitives.
-
-#### Performance (by design)
-
-- Uncontended acquisition is as close to a single atomic operation as possible
-- No allocations, tasks, or state machines unless contention occurs
-- Cancellation and disposal logic are completely excluded from the fast path
-- Deterministic behavior under contention
-
----
+`AsyncLock` provides cancellable async acquisition, blocking synchronous acquisition, and a non-blocking try-lock. Contended async waiters use pooled `IValueTaskSource` instances, while the uncontended path avoids allocating a `Task`.
 
 ## Installation
 
@@ -39,58 +15,99 @@ It provides the following guarantees:
 dotnet add package Soenneker.Asyncs.Locks
 ```
 
----
+## Asynchronous locking
 
-## Usage
-
-### Async
+Keep the lock on the object that owns the protected state and dispose every acquired `Releaser`:
 
 ```csharp
-await using (await _lock.Lock(ct))
+using Soenneker.Asyncs.Locks;
+
+public sealed class BalanceStore : IAsyncDisposable
 {
-    // critical section
+    private readonly AsyncLock _lock = new();
+    private decimal _balance;
+
+    public async ValueTask Add(
+        decimal amount,
+        CancellationToken cancellationToken)
+    {
+        using Releaser releaser = await _lock.Lock(cancellationToken);
+        _balance += amount;
+    }
+
+    public ValueTask DisposeAsync() => _lock.DisposeAsync();
 }
 ```
 
-### Sync
+`Releaser` implements `IDisposable`, not `IAsyncDisposable`, so use `using` for the acquired token even inside an async method. `await using` is appropriate for the `AsyncLock` itself when the owner is disposed asynchronously.
+
+The tokenless overload avoids cancellation registration when cancellation is not needed:
 
 ```csharp
-using (_lock.LockSync())
-{
-    // critical section
-}
+using Releaser releaser = await asyncLock.Lock();
 ```
 
-### Try-lock
+## Synchronous locking
+
+Synchronous and asynchronous callers contend for the same mutex:
 
 ```csharp
-if (_lock.TryLock(out var releaser))
+using Releaser releaser = asyncLock.LockSync(cancellationToken);
+// Protected synchronous work
+```
+
+`LockSync` blocks the calling thread while contended. Do not use it from asynchronous request paths merely to avoid `await`; use `Lock` there.
+
+## Try without waiting
+
+```csharp
+if (asyncLock.TryLock(out Releaser releaser))
 {
     using (releaser)
     {
-        // critical section
+        // The lock is held here.
     }
+}
+else
+{
+    // Another caller holds or is waiting for the lock, or it was disposed.
 }
 ```
 
----
+`TryLock` returns `false` instead of waiting. After disposal it also returns `false`; the blocking acquisition methods throw `ObjectDisposedException`.
 
-## Benchmarks
+## Cancellation
 
-### Async lock acquisition
+`Lock(CancellationToken)` and `LockSync(CancellationToken)` support cancellation before acquisition and while queued. A cancelled waiter does not enter the critical section. Once acquisition succeeds, cancellation does not release the lock; only disposing the returned `Releaser` does that.
 
-| Method                    |     Mean |    Error |   StdDev |   Median |        Ratio | Allocated |
-| ------------------------- | -------: | -------: | -------: | -------: | -----------: | --------: |
-| **Soenneker.Asyncs.Lock** | 10.06 ns | 0.212 ns | 0.393 ns | 10.01 ns |     baseline |         - |
-| SemaphoreSlim             | 19.17 ns | 0.406 ns | 0.360 ns | 19.10 ns | 1.91x slower |         - |
-| Nito.AsyncEx.AsyncLock    | 55.32 ns | 1.078 ns | 2.645 ns | 54.81 ns | 5.51x slower |     320 B |
+Always keep acquisition outside the protected `try`/`finally` or `using` body so code does not attempt to release a lock it never acquired.
 
----
+## Disposal
 
-### Synchronous lock acquisition
+The two disposal methods intentionally differ:
 
-| Method                    |     Mean |    Error |   StdDev |   Median |        Ratio | Allocated |
-| ------------------------- | -------: | -------: | -------: | -------: | -----------: | --------: |
-| **Soenneker.Asyncs.Lock** |  8.09 ns | 0.179 ns | 0.314 ns |  8.03 ns |     baseline |         - |
-| SemaphoreSlim             | 19.49 ns | 0.403 ns | 0.727 ns | 19.09 ns | 2.41x slower |         - |
-| Nito.AsyncEx.AsyncLock    | 48.43 ns | 1.005 ns | 2.915 ns | 48.05 ns | 6.00x slower |     320 B |
+| Method | Current holder | Queued and future callers |
+| --- | --- | --- |
+| `Dispose()` | May finish and release normally; disposal does not wait. | Queued callers fail and future blocking acquisitions throw. |
+| `DisposeAsync()` | Waits for the current holder to release. | Queued callers fail and future blocking acquisitions throw. |
+
+Neither method forcibly interrupts code already inside the critical section. Dispose the lock only when its owning service is shutting down and no new work should be accepted.
+
+## Correctness rules
+
+- `AsyncLock` is not reentrant. Code that already holds it must not acquire it again before releasing it.
+- Keep critical sections short and avoid calling unknown code while holding the lock.
+- Dispose each successful `Releaser` exactly once. It is a value type, so copying it and disposing multiple copies releases the mutex more than once and corrupts ownership state.
+- Do not use the default value of `Releaser`; only use values returned by successful acquisition.
+- A cancellation token controls acquisition only, not work performed after acquisition.
+
+## API
+
+| Member | Behavior |
+| --- | --- |
+| `Lock()` | Acquires asynchronously without cancellation registration. |
+| `Lock(CancellationToken)` | Acquires asynchronously with cancellable waiting. |
+| `LockSync(CancellationToken)` | Blocks until acquired or cancelled. |
+| `TryLock(out Releaser)` | Attempts immediate acquisition. |
+| `Dispose()` | Rejects waiters without waiting for the holder. |
+| `DisposeAsync()` | Rejects waiters and waits for the holder to exit. |
