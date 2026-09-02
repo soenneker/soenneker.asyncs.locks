@@ -297,15 +297,15 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_PreventsNewAcquisitions()
+    public async Task Dispose_PreventsNewAcquisitions(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         await asyncLock.DisposeAsync();
 
-        Func<Task<Releaser>>? act = asyncLock.Awaiting(l => l.Lock().AsTask());
+        Func<Task<Releaser>>? act = asyncLock.Awaiting(l => l.Lock(cancellationToken).AsTask());
         await act.Should().ThrowAsync<ObjectDisposedException>();
 
-        asyncLock.Invoking(l => l.LockSync())
+        asyncLock.Invoking(l => l.LockSync(cancellationToken))
                  .Should()
                  .Throw<ObjectDisposedException>();
     }
@@ -602,12 +602,12 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_AfterDispose_ThrowsObjectDisposedException()
+    public async Task LockAsync_AfterDispose_ThrowsObjectDisposedException(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         await asyncLock.DisposeAsync();
 
-        Func<Task<Releaser>>? act = asyncLock.Awaiting(l => l.Lock().AsTask());
+        Func<Task<Releaser>>? act = asyncLock.Awaiting(l => l.Lock(cancellationToken).AsTask());
         ExceptionAssertions<ObjectDisposedException>? ex = await act.Should().ThrowAsync<ObjectDisposedException>();
 
         ex.And.ObjectName.Should().Be(nameof(AsyncLock));
