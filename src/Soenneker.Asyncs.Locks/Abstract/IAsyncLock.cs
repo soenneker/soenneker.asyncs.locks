@@ -12,9 +12,9 @@ namespace Soenneker.Asyncs.Locks.Abstract;
 /// This interface provides a lock mechanism optimized for low allocations and correct concurrency:
 /// </para>
 /// <list type="bullet">
-/// <item><description>State tracking: ValueAtomicBool (_held, _disposed)</description></item>
-/// <item><description>Async waits: pooled IValueTaskSource waiters (no Task alloc)</description></item>
-/// <item><description>Sync waits: TaskCompletionSource only when contended (safe; avoids lost wakeups)</description></item>
+/// <item><description>Ownership, disposal, waiter count, and handoff coordination share one packed atomic state.</description></item>
+/// <item><description>The first contended waiter uses a direct handoff slot; additional waiters use an intrusive MPSC queue.</description></item>
+/// <item><description>Contended waits use pooled IValueTaskSource waiters.</description></item>
 /// <item><description>Dispose(): fails queued waiters + prevents new entrants (does not wait for current holder)</description></item>
 /// <item><description>DisposeAsync(): Dispose() + waits until current holder (if any) exits</description></item>
 /// </list>

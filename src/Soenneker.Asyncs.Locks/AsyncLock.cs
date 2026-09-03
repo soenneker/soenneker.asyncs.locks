@@ -1,143 +1,123 @@
+using Soenneker.Asyncs.Locks.Abstract;
+using Soenneker.Queues.Intrusive.ValueMpsc;
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Soenneker.Asyncs.Locks.Abstract;
-using Soenneker.Atomics.ValueInts;
-using Soenneker.Queues.Intrusive.ValueMpsc;
 
 namespace Soenneker.Asyncs.Locks;
 
-/// <inheritdoc cref="IAsyncLock"/>
 public sealed class AsyncLock : IAsyncLock
 {
-    private const int _availableNoWaiters = 0;
-    private const int _disposeBit = 1;
-    private const int _lockValue = 2;
+    private const long _countMask = uint.MaxValue;
+    private const long _disposedBit = 1L << 32;
+    private const long _consumerBit = 1L << 33;
 
-    /// <summary>
-    /// State encoding:
-    /// - bit0: dispose flag (0 = in use, 1 = disposed)
-    /// - bits1..: acquire count * 2 (including current holder, so we can add/subtract 2 per acquire while preserving bit0)
-    /// </summary>
-    private ValueAtomicInt _state;
-
-    // Waiter queue
-    // - many producers (LockSlow*) enqueue waiter nodes
-    // - single consumer (Exit) dequeues waiter nodes
-    private ValueIntrusiveMpscQueue<WaiterHandle> _waiterQueue;
-
+    // Low 32 bits: holder plus announced waiters. High bits: disposal and queue-consumer ownership.
+    private long _state;
+    private int _useOverflowQueue;
+    private Waiter? _frontWaiter;
+    private ValueIntrusiveMpscReclaimingQueue<Waiter> _waiterQueue;
     private TaskCompletionSource? _disposeWaiter;
 
     public AsyncLock()
     {
-        // Permanent stub sentinel node for the lifetime of this AsyncLock.
-        // Mark as consumed so it will never be awaited and can be recycled when dequeued.
-        WaiterHandle stub = Waiter.Rent();
-        stub.MarkConsumed();
+        Waiter stub = Waiter.Rent();
         stub.Next = null;
-
-        _waiterQueue = new ValueIntrusiveMpscQueue<WaiterHandle>(stub);
+        _waiterQueue = new ValueIntrusiveMpscReclaimingQueue<Waiter>(stub);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnqueueWaiter(out WaiterHandle handle)
+    public ValueTask<Releaser> Lock()
     {
-        handle = Waiter.Rent();
-        handle.Next = null;
-        _waiterQueue.Enqueue(handle);
+        if (!TryAnnounce(out bool acquired))
+            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+
+        if (acquired)
+            return new ValueTask<Releaser>(new Releaser(this));
+
+        return LockSlow();
     }
 
-    // Consumer-only dequeue wrapper that also marks the old head dequeued for recycling.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryDequeueWaiter(out WaiterHandle node)
-    {
-        WaiterHandle oldHead = _waiterQueue.Head;
-
-        // Bounded spin to reduce the tiny "tail swapped but link not yet published" window.
-        if (!_waiterQueue.TryDequeueSpin(out node, maxSpins: 16))
-            return false;
-
-        // old head is no longer reachable from the queue and can be recycled.
-        oldHead.MarkDequeued();
-        return true;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public ValueTask<Releaser> Lock(CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            if ((_state.Value & _disposeBit) != 0)
+            if (IsDisposed(Volatile.Read(ref _state)))
                 return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
 
             return ValueTask.FromCanceled<Releaser>(cancellationToken);
         }
 
-        if (_state.Value == _availableNoWaiters && _state.TrySet(_lockValue, _availableNoWaiters))
+        if (!TryAnnounce(out bool acquired))
+            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+
+        if (acquired)
             return new ValueTask<Releaser>(new Releaser(this));
 
-        int state = _state.Add(_lockValue);
-
-        if (state == _lockValue)
-            return new ValueTask<Releaser>(new Releaser(this));
-
-        return LockSlow(state, cancellationToken);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-    public ValueTask<Releaser> Lock()
-    {
-        if (_state.Value == _availableNoWaiters && _state.TrySet(_lockValue, _availableNoWaiters))
-            return new ValueTask<Releaser>(new Releaser(this));
-
-        int state = _state.Add(_lockValue);
-
-        if (state == _lockValue)
-            return new ValueTask<Releaser>(new Releaser(this));
-
-        return LockSlowNoToken(state);
+        return LockSlow(cancellationToken);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private ValueTask<Releaser> LockSlow(int state, CancellationToken cancellationToken)
+    private ValueTask<Releaser> LockSlow()
     {
-        if ((state & _disposeBit) != 0)
-        {
-            _state.Add(-_lockValue);
-            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
-        }
-
-        EnqueueWaiter(out WaiterHandle handle);
-
-        // Catch disposal that occurred after we announced but before/after enqueue.
-        if ((_state.Value & _disposeBit) != 0)
-            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
-
-        return handle.NewValueTask(cancellationToken);
+        Waiter waiter = Waiter.Rent();
+        ValueTask<Releaser> result = waiter.NewValueTask();
+        Publish(waiter);
+        return result;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private ValueTask<Releaser> LockSlowNoToken(int state)
+    private ValueTask<Releaser> LockSlow(CancellationToken cancellationToken)
     {
-        if ((state & _disposeBit) != 0)
+        Waiter waiter = Waiter.Rent();
+        ValueTask<Releaser> result = waiter.NewValueTask(cancellationToken);
+        Publish(waiter);
+        return result;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryAnnounce(out bool acquired)
+    {
+        long state = Volatile.Read(ref _state);
+
+        while (true)
         {
-            _state.Add(-_lockValue);
-            return ValueTask.FromException<Releaser>(new ObjectDisposedException(nameof(AsyncLock)));
+            if (IsDisposed(state))
+            {
+                acquired = false;
+                return false;
+            }
+
+            int count = GetCount(state);
+            long observed = Interlocked.CompareExchange(ref _state, WithCount(state, count + 1), state);
+
+            if (observed == state)
+            {
+                acquired = count == 0;
+                return true;
+            }
+
+            state = observed;
         }
+    }
 
-        EnqueueWaiter(out WaiterHandle handle);
-
-        if ((_state.Value & _disposeBit) != 0)
-            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
-
-        return handle.NewValueTask();
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void Publish(Waiter waiter)
+    {
+        if (Volatile.Read(ref _useOverflowQueue) != 0 ||
+            Interlocked.CompareExchange(ref _frontWaiter, waiter, null) is not null)
+        {
+            Volatile.Write(ref _useOverflowQueue, 1);
+            _waiterQueue.Enqueue(waiter);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryLock(out Releaser releaser)
     {
-        if (_state.TrySet(_lockValue, _availableNoWaiters))
+        if (Interlocked.CompareExchange(ref _state, 1, 0) == 0)
         {
             releaser = new Releaser(this);
             return true;
@@ -152,118 +132,197 @@ public sealed class AsyncLock : IAsyncLock
     {
         if (cancellationToken.IsCancellationRequested)
         {
-            if ((_state.Value & _disposeBit) != 0)
+            if (IsDisposed(Volatile.Read(ref _state)))
                 throw new ObjectDisposedException(nameof(AsyncLock));
 
             throw new OperationCanceledException(cancellationToken);
         }
 
-        int state = _state.Add(_lockValue);
+        if (!TryAnnounce(out bool acquired))
+            throw new ObjectDisposedException(nameof(AsyncLock));
 
-        if (state == _lockValue)
+        if (acquired)
             return new Releaser(this);
 
-        return LockSyncSlow(state, cancellationToken);
+        return LockSyncSlow(cancellationToken);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private Releaser LockSyncSlow(int state, CancellationToken cancellationToken)
+    private Releaser LockSyncSlow(CancellationToken cancellationToken)
     {
-        if ((state & _disposeBit) != 0)
-        {
-            _state.Add(-_lockValue);
-            throw new ObjectDisposedException(nameof(AsyncLock));
-        }
-
-        EnqueueWaiter(out WaiterHandle handle);
-
-        if ((_state.Value & _disposeBit) != 0)
-            handle.TrySetException(new ObjectDisposedException(nameof(AsyncLock)));
-
-        return handle.NewValueTask(cancellationToken).AsTask().GetAwaiter().GetResult();
+        Waiter waiter = Waiter.Rent();
+        ValueTask<Releaser> result = waiter.NewValueTask(cancellationToken);
+        Publish(waiter);
+        return result.AsTask().GetAwaiter().GetResult();
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void Exit()
     {
+        long state = Volatile.Read(ref _state);
+        var spinner = new SpinWait();
+
         while (true)
         {
-            int state = _state.Add(-_lockValue);
-
-            // No announced waiters (0 or disposed-bit only).
-            if (state < _lockValue)
+            if (HasConsumer(state))
             {
-                if ((state & _disposeBit) != 0)
-                    Volatile.Read(ref _disposeWaiter)?.TrySetResult();
-
-                return;
-            }
-
-            if ((_state.Value & _disposeBit) != 0)
-            {
-                Volatile.Read(ref _disposeWaiter)?.TrySetResult();
-                return;
-            }
-
-            // We have at least one announced waiter. Dequeue and try to grant.
-            // IMPORTANT: If dequeue fails due to the tiny "link window", restore the state we just burned.
-            if (!TryDequeueWaiter(out WaiterHandle node))
-            {
-                _state.Add(_lockValue);
+                spinner.SpinOnce();
+                state = Volatile.Read(ref _state);
                 continue;
             }
 
-            // Try to grant. If canceled/disposed already, TryGrant returns false; loop to attempt next.
-            if (node.TryGrant(new Releaser(this)))
+            int count = GetCount(state);
+
+            if (count == 0)
                 return;
+
+            int remaining = count - 1;
+            bool consume = remaining != 0 && !IsDisposed(state);
+            long updated = WithCount(state, remaining);
+
+            if (consume)
+                updated |= _consumerBit;
+
+            long observed = Interlocked.CompareExchange(ref _state, updated, state);
+
+            if (observed != state)
+            {
+                state = observed;
+                continue;
+            }
+
+            if (consume)
+                GrantNext();
+            else if (remaining == 0 && IsDisposed(state))
+                Volatile.Read(ref _disposeWaiter)?.TrySetResult();
+
+            return;
         }
     }
 
-    /// <summary>
-    /// Releases resources used by the current instance.
-    /// </summary>
+    private void GrantNext()
+    {
+        while (true)
+        {
+            Waiter waiter = DequeueWaiter();
+
+            if (waiter.TryGrant(new Releaser(this)))
+            {
+                Interlocked.And(ref _state, ~_consumerBit);
+                return;
+            }
+
+            waiter.MarkDequeued();
+            long state = Volatile.Read(ref _state);
+
+            while (true)
+            {
+                int remaining = GetCount(state) - 1;
+                long updated = WithCount(state, remaining);
+
+                if (remaining == 0)
+                    updated &= ~_consumerBit;
+
+                long observed = Interlocked.CompareExchange(ref _state, updated, state);
+
+                if (observed == state)
+                {
+                    if (remaining == 0)
+                        return;
+
+                    break;
+                }
+
+                state = observed;
+            }
+        }
+    }
+
+    private Waiter DequeueWaiter()
+    {
+        var spinner = new SpinWait();
+
+        while (true)
+        {
+            Waiter? waiter = TakeFrontWaiter();
+
+            if (waiter is not null)
+                return waiter;
+
+            if (_waiterQueue.TryDequeueSpinUntilLinked(out waiter))
+                return waiter;
+
+            spinner.SpinOnce();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Waiter? TakeFrontWaiter()
+    {
+        Waiter? waiter = Volatile.Read(ref _frontWaiter);
+
+        if (waiter is not null)
+            Volatile.Write(ref _frontWaiter, null);
+
+        return waiter;
+    }
+
     public void Dispose()
     {
-        int state = _state.Exchange(_disposeBit + _lockValue);
+        long state = Volatile.Read(ref _state);
+        var spinner = new SpinWait();
 
-        if ((state & _disposeBit) != 0)
-            return;
-
-        if (state == _availableNoWaiters)
+        while (true)
         {
-            _state.Exchange(_disposeBit);
+            if (IsDisposed(state))
+                return;
+
+            if (HasConsumer(state))
+            {
+                spinner.SpinOnce();
+                state = Volatile.Read(ref _state);
+                continue;
+            }
+
+            long updated = state | _disposedBit | _consumerBit;
+            long observed = Interlocked.CompareExchange(ref _state, updated, state);
+
+            if (observed == state)
+                break;
+
+            state = observed;
+        }
+
+        int count = GetCount(state);
+        int queued = count > 0 ? count - 1 : 0;
+        var exception = new ObjectDisposedException(nameof(AsyncLock));
+
+        for (var i = 0; i < queued; i++)
+        {
+            Waiter waiter = DequeueWaiter();
+            waiter.TrySetException(exception);
+            waiter.MarkDequeued();
+        }
+
+        int holderCount = count > 0 ? 1 : 0;
+        Volatile.Write(ref _state, _disposedBit | (uint)holderCount);
+
+        if (holderCount == 0)
             Volatile.Read(ref _disposeWaiter)?.TrySetResult();
-            return;
-        }
-
-        var ode = new ObjectDisposedException(nameof(AsyncLock));
-
-        // Fault all currently linked waiters starting from head.Next.
-        // If a producer has swapped tail but not linked prev.Next yet, it will still observe disposed
-        // and fault itself via the disposed-bit checks in LockSlow*.
-        WaiterHandle head = _waiterQueue.Head;
-        WaiterHandle? node = Volatile.Read(ref head.Next);
-
-        while (node is not null)
-        {
-            node.TrySetException(ode);
-            node = Volatile.Read(ref node.Next);
-        }
     }
 
-    /// <summary>
-    /// Asynchronously releases resources used by the current instance.
-    /// </summary>
-    /// <returns>A task that represents the asynchronous operation.</returns>
     public ValueTask DisposeAsync()
     {
-        if (_state.Value == _disposeBit)
+        long state = Volatile.Read(ref _state);
+
+        if (IsDisposed(state) && GetCount(state) == 0)
             return ValueTask.CompletedTask;
 
         TaskCompletionSource waiter = GetDisposeWaiter();
         Dispose();
 
-        if (_state.Value == _disposeBit)
+        state = Volatile.Read(ref _state);
+        if (IsDisposed(state) && GetCount(state) == 0)
             waiter.TrySetResult();
 
         return new ValueTask(waiter.Task);
@@ -279,4 +338,16 @@ public sealed class AsyncLock : IAsyncLock
         var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         return Interlocked.CompareExchange(ref _disposeWaiter, created, null) ?? created;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetCount(long state) => unchecked((int)state);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsDisposed(long state) => (state & _disposedBit) != 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool HasConsumer(long state) => (state & _consumerBit) != 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long WithCount(long state, int count) => (state & ~_countMask) | (uint)count;
 }

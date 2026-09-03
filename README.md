@@ -7,7 +7,7 @@
 
 A low-allocation mutex shared by asynchronous and synchronous callers.
 
-`AsyncLock` provides cancellable async acquisition, blocking synchronous acquisition, and a non-blocking try-lock. Contended async waiters use pooled `IValueTaskSource` instances, while the uncontended path avoids allocating a `Task`.
+`AsyncLock` provides cancellable async acquisition, blocking synchronous acquisition, and a non-blocking try-lock. The uncontended path avoids allocating a `Task`; under contention, a direct first-waiter slot and immediately reclaimable intrusive MPSC queue hand off pooled `IValueTaskSource` waiters.
 
 ## Installation
 
