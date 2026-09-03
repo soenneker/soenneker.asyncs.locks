@@ -1,3 +1,4 @@
+using Soenneker.Atomics.ValueInts;
 using Soenneker.Queues.Intrusive.Abstractions;
 using System;
 using System.Runtime.CompilerServices;
@@ -18,8 +19,8 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
 
     private static readonly Action<object?> _cancelCallback = static state => ((Waiter)state!).Cancel();
 
-    private int _state;
-    private int _reclamationState;
+    private ValueAtomicInt _state;
+    private ValueAtomicInt _reclamationState;
     private ManualResetValueTaskSourceCore<Releaser> _core = new() {RunContinuationsAsynchronously = true};
     private CancellationToken _cancellationToken;
     private CancellationTokenRegistration _registration;
@@ -83,7 +84,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
         _cancellable = false;
         _requiresArbitration = false;
         _queuedVersion = _core.Version;
-        Volatile.Write(ref _state, (ushort)_queuedVersion);
+        _state.VolatileWrite((ushort)_queuedVersion);
     }
 
     private void RegisterCancellation(CancellationToken cancellationToken)
@@ -105,7 +106,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryComplete()
-        => Interlocked.CompareExchange(ref _state, (ushort)_queuedVersion | _completedBit, (ushort)_queuedVersion) == (ushort)_queuedVersion;
+        => _state.CompareExchange((ushort)_queuedVersion | _completedBit, (ushort)_queuedVersion) == (ushort)_queuedVersion;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Cancel()
@@ -172,21 +173,21 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void MarkConsumed()
     {
-        if ((Interlocked.Or(ref _reclamationState, _consumedBit) & _dequeuedBit) != 0)
+        if ((_reclamationState.Or(_consumedBit) & _dequeuedBit) != 0)
             Recycle(this);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void MarkDequeued()
     {
-        if ((Interlocked.Or(ref _reclamationState, _dequeuedBit) & _consumedBit) != 0)
+        if ((_reclamationState.Or(_dequeuedBit) & _consumedBit) != 0)
             Recycle(this);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void Recycle(Waiter waiter)
     {
-        waiter._reclamationState = 0;
+        waiter._reclamationState = default;
         waiter._next = _localPool;
         _localPool = waiter;
     }
