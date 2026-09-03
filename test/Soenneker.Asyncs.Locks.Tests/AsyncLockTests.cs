@@ -574,6 +574,83 @@ public sealed class AsyncLockTests
     }
 
     [Test]
+    public async Task LockAsync_TokenlessDirectHandoff_Stress_WorksCorrectly()
+    {
+        await using var asyncLock = new AsyncLock();
+        var count = 0;
+
+        Task[] workers = Enumerable.Range(0, 2)
+                                   .Select(_ => Task.Run(async () =>
+                                   {
+                                       for (var i = 0; i < 20_000; i++)
+                                       {
+                                           using Releaser releaser = await asyncLock.Lock();
+                                           count++;
+                                           await Task.Yield();
+                                       }
+                                   }, TestToken))
+                                   .ToArray();
+
+        await Task.WhenAll(workers).WaitAsync(TimeoutToken());
+        count.Should().Be(40_000);
+    }
+
+    [Test]
+    public async Task LockAsync_TokenlessDirectAndOverflowWaiters_AllAcquire()
+    {
+        await using var asyncLock = new AsyncLock();
+        Releaser holder = await asyncLock.Lock();
+        Task<Releaser>[] waiters = Enumerable.Range(0, 32)
+                                             .Select(_ => asyncLock.Lock().AsTask())
+                                             .ToArray();
+
+        holder.Dispose();
+
+        foreach (Task<Releaser> waiter in waiters)
+        {
+            using Releaser acquired = await waiter.WaitAsync(TimeoutToken());
+        }
+
+        asyncLock.TryLock(out Releaser afterOverflow).Should().BeTrue();
+        afterOverflow.Dispose();
+    }
+
+    [Test]
+    public async Task Dispose_TokenlessDirectHandoff_Race_Stress_Completes()
+    {
+        for (var i = 0; i < 5_000; i++)
+        {
+            var asyncLock = new AsyncLock();
+            Releaser holder = await asyncLock.Lock();
+            Task<Releaser> waiter = asyncLock.Lock().AsTask();
+
+            var start = new ManualResetEventSlim(false);
+            Task disposeTask = Task.Run(() =>
+            {
+                start.Wait();
+                asyncLock.Dispose();
+            }, TestToken);
+            Task releaseTask = Task.Run(() =>
+            {
+                start.Wait();
+                holder.Dispose();
+            }, TestToken);
+
+            start.Set();
+            await Task.WhenAll(disposeTask, releaseTask).WaitAsync(TimeoutToken());
+
+            try
+            {
+                using Releaser acquired = await waiter.WaitAsync(TimeoutToken());
+            }
+            catch (ObjectDisposedException)
+            {
+                // Disposal won the ownership-transfer race.
+            }
+        }
+    }
+
+    [Test]
     public void LockSync_RapidAcquireRelease_WorksCorrectly()
     {
         using var asyncLock = new AsyncLock();

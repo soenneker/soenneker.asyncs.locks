@@ -24,11 +24,18 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     private CancellationToken _cancellationToken;
     private CancellationTokenRegistration _registration;
     private bool _cancellable;
+    private bool _requiresArbitration;
     private short _queuedVersion;
     private Waiter? _next;
 
     private Waiter()
     {
+    }
+
+    internal bool CanGrantDirectly
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => !_requiresArbitration;
     }
 
     public ref Waiter? Next
@@ -74,6 +81,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     private void Prepare()
     {
         _cancellable = false;
+        _requiresArbitration = false;
         _queuedVersion = _core.Version;
         Volatile.Write(ref _state, (ushort)_queuedVersion);
     }
@@ -81,6 +89,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     private void RegisterCancellation(CancellationToken cancellationToken)
     {
         _cancellable = true;
+        _requiresArbitration = true;
 
         if (cancellationToken.IsCancellationRequested)
         {
@@ -106,14 +115,10 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryGrant(Releaser releaser)
-    {
-        if (!TryComplete())
-            return false;
+    internal bool TryReserveGrant() => TryComplete();
 
-        _core.SetResult(releaser);
-        return true;
-    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void CompleteGrant(Releaser releaser) => _core.SetResult(releaser);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TrySetException(Exception exception)
