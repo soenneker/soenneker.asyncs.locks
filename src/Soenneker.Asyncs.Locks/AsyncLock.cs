@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 namespace Soenneker.Asyncs.Locks;
 
+/// <inheritdoc cref="IAsyncLock" />
 public sealed class AsyncLock : IAsyncLock
 {
     private const long _countMask = uint.MaxValue;

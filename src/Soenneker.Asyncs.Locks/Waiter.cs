@@ -8,6 +8,7 @@ using System.Threading.Tasks.Sources;
 
 namespace Soenneker.Asyncs.Locks;
 
+/// <inheritdoc cref="IIntrusiveNode{Waiter}" />
 internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter>
 {
     private const int _completedBit = 1 << 16;
