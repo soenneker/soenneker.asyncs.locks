@@ -332,13 +332,15 @@ public sealed class AsyncLock : IAsyncLock
 
         int count = GetCount(state);
         int queued = count > 0 ? count - 1 : 0;
-        var exception = new ObjectDisposedException(nameof(AsyncLock));
-
-        for (var i = 0; i < queued; i++)
+        if (queued > 0)
         {
-            Waiter waiter = DequeueWaiter();
-            waiter.TrySetException(exception);
-            waiter.MarkDequeued();
+            var exception = new ObjectDisposedException(nameof(AsyncLock));
+            for (var i = 0; i < queued; i++)
+            {
+                Waiter waiter = DequeueWaiter();
+                waiter.TrySetException(exception);
+                waiter.MarkDequeued();
+            }
         }
 
         int holderCount = count > 0 ? 1 : 0;
@@ -350,14 +352,13 @@ public sealed class AsyncLock : IAsyncLock
 
     public ValueTask DisposeAsync()
     {
+        Dispose();
         long state = Volatile.Read(ref _state);
 
         if (IsDisposed(state) && GetCount(state) == 0)
             return ValueTask.CompletedTask;
 
         TaskCompletionSource waiter = GetDisposeWaiter();
-        Dispose();
-
         state = Volatile.Read(ref _state);
         if (IsDisposed(state) && GetCount(state) == 0)
             waiter.TrySetResult();
