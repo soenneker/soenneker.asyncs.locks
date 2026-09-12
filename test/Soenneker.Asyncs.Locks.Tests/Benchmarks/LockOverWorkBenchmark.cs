@@ -10,6 +10,8 @@ namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
 [MemoryDiagnoser]
 public class LockOverWorkBenchmark
 {
+    private readonly object _monitor = new();
+    private readonly System.Threading.Lock _threadingLock = new();
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
     private NExtensionsAsyncLock _nextensionsLock = null!;
@@ -69,5 +71,24 @@ public class LockOverWorkBenchmark
         _counter++;
         Thread.SpinWait(16);
         _semaphoreSlim.Release();
+    }
+
+    [Benchmark(Description = "lock (object / Monitor)")]
+    public void Monitor()
+    {
+        lock (_monitor)
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
+    }
+    [Benchmark(Description = "System.Threading.Lock")]
+    public void ThreadingLock()
+    {
+        lock (_threadingLock)
+        {
+            _counter++;
+            Thread.SpinWait(16);
+        }
     }
 }

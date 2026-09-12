@@ -7,6 +7,9 @@
     <File Path=".github/workflows/codeql.yml" />
     <File Path=".github/workflows/publish-package.yml" />
   </Folder>
+  <Folder Name="/benchmark/">
+    <Project Path="benchmark/Soenneker.Asyncs.Locks.Benchmarks/Soenneker.Asyncs.Locks.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Soenneker.Asyncs.Locks/Soenneker.Asyncs.Locks.csproj" />
   </Folder>

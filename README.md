@@ -111,3 +111,23 @@ Neither method forcibly interrupts code already inside the critical section. Dis
 | `TryLock(out Releaser)` | Attempts immediate acquisition. |
 | `Dispose()` | Rejects waiters without waiting for the holder. |
 | `DisposeAsync()` | Rejects waiters and waits for the holder to exit. |
+
+## Async
+
+| API / calling pattern | Mean | Error (±) | StdDev | Allocated/op |
+| --- | ---: | ---: | ---: | ---: |
+| Soenneker `await Lock()` | 10.796 ns | 0.2326 ns | 0.6327 ns | 0 B |
+| SemaphoreSlim `await WaitAsync()` / `Release()` | 18.316 ns | 0.3860 ns | 1.0032 ns | 0 B |
+| NExtensions `await EnterScopeAsync()` | 25.044 ns | 0.5205 ns | 1.3620 ns | 0 B |
+| Nito `await LockAsync()` | 58.700 ns | 1.1912 ns | 2.6644 ns | 320 B |
+
+## Synchronous
+
+| API / calling pattern | Mean | Error (±) | StdDev | Allocated/op |
+| --- | ---: | ---: | ---: | ---: |
+| `lock (object)` / Monitor | 7.430 ns | 0.1270 ns | 0.1060 ns | 0 B |
+| Soenneker `LockSync()` | 7.983 ns | 0.0664 ns | 0.0887 ns | 0 B |
+| `lock (System.Threading.Lock)` | 8.347 ns | 0.1860 ns | 0.4835 ns | 0 B |
+| SemaphoreSlim `Wait()` / `Release()` | 19.592 ns | 0.3969 ns | 0.8285 ns | 0 B |
+| NExtensions `EnterScopeAsync().GetAwaiter().GetResult()` | 23.102 ns | 0.4816 ns | 1.1814 ns | 0 B |
+| Nito `Lock()` | 42.967 ns | 0.8329 ns | 0.8553 ns | 320 B |

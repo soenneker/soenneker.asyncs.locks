@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
@@ -12,6 +12,7 @@ namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
 /// 1) Single-waiter enqueue + handoff cost (your current idea), but looped to reduce harness noise.
 /// Measures: acquire fast-path + enqueue 1 waiter + release + waiter resume.
 /// </summary>
+[MemoryDiagnoser]
 public class SingleWaiterHandoffBenchmark
 {
     private SoennekerAsyncLock _soennekerLock = null!;
@@ -20,7 +21,6 @@ public class SingleWaiterHandoffBenchmark
     private SemaphoreSlim _semaphoreSlim = null!;
 
     [Params(1)]
-    //[Params(1, 10, 100, 1_000)]
     public int Ops;
 
     [GlobalSetup]
@@ -65,29 +65,29 @@ public class SingleWaiterHandoffBenchmark
         }
     }
 
-    //[Benchmark(Description = "Nito: Single waiter handoff")]
-    //public async ValueTask Nito()
-    //{
-    //    for (int i = 0; i < Ops; i++)
-    //    {
-    //        IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
-    //        var contend = _nitoLock.LockAsync();
-    //        releaser.Dispose();
-    //        var releaser2 = await contend.ConfigureAwait(false);
-    //        releaser2.Dispose();
-    //    }
-    //}
+    [Benchmark(Description = "Nito: Single waiter handoff")]
+    public async ValueTask Nito()
+    {
+        for (int i = 0; i < Ops; i++)
+        {
+            IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
+            var contend = _nitoLock.LockAsync();
+            releaser.Dispose();
+            var releaser2 = await contend.ConfigureAwait(false);
+            releaser2.Dispose();
+        }
+    }
 
-    //[Benchmark(Description = "NExtensions: Single waiter handoff")]
-    //public async ValueTask NExtensions()
-    //{
-    //    for (int i = 0; i < Ops; i++)
-    //    {
-    //        NExtensionsAsyncLock.Releaser releaser = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
-    //        ValueTask<NExtensionsAsyncLock.Releaser> contend = _nextensionsLock.EnterScopeAsync();
-    //        releaser.Dispose();
-    //        var releaser2 = await contend.ConfigureAwait(false);
-    //        releaser2.Dispose();
-    //    }
-    //}
+    [Benchmark(Description = "NExtensions: Single waiter handoff")]
+    public async ValueTask NExtensions()
+    {
+        for (int i = 0; i < Ops; i++)
+        {
+            NExtensionsAsyncLock.Releaser releaser = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
+            ValueTask<NExtensionsAsyncLock.Releaser> contend = _nextensionsLock.EnterScopeAsync();
+            releaser.Dispose();
+            var releaser2 = await contend.ConfigureAwait(false);
+            releaser2.Dispose();
+        }
+    }
 }

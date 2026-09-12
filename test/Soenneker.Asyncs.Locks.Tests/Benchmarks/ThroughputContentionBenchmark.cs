@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using BenchmarkDotNet.Attributes;
@@ -15,6 +15,8 @@ namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
 [MemoryDiagnoser]
 public class ThroughputContentionBenchmark
 {
+    private readonly object _monitor = new();
+    private readonly System.Threading.Lock _threadingLock = new();
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
     private NExtensionsAsyncLock _nextensionsLock = null!;
@@ -23,7 +25,7 @@ public class ThroughputContentionBenchmark
     private Task[] _workers = Array.Empty<Task>();
 
     private int _counter;
-    private ManualResetEventSlim _start = null!;
+    private TaskCompletionSource _start = null!;
 
     [Params(1, 2, 4, 8, 16)]
     public int Contenders;
@@ -39,15 +41,15 @@ public class ThroughputContentionBenchmark
         _nextensionsLock = new NExtensionsAsyncLock();
         _semaphoreSlim = new SemaphoreSlim(1, 1);
 
-        _start = new ManualResetEventSlim(false);
+        _start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _workers = new Task[Contenders];
     }
 
-    [IterationSetup]
-    public void IterationSetup()
+    // Reset per invocation, including warmup and pilot invocations.
+    private void ResetBatch()
     {
         _counter = 0;
-        _start.Reset();
+        _start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         if (_workers.Length != Contenders)
             _workers = new Task[Contenders];
@@ -58,17 +60,17 @@ public class ThroughputContentionBenchmark
     {
         _soennekerLock.Dispose();
         _semaphoreSlim.Dispose();
-        _start.Dispose();
     }
 
     [Benchmark(Baseline = true, Description = "Soenneker: Throughput contention")]
     public async Task Soenneker()
     {
+        ResetBatch();
         for (int w = 0; w < Contenders; w++)
         {
             _workers[w] = Task.Run(async () =>
             {
-                _start.Wait();
+                await _start.Task.ConfigureAwait(false);
                 for (int i = 0; i < OpsPerWorker; i++)
                 {
                     Releaser r = await _soennekerLock.Lock().ConfigureAwait(false);
@@ -84,78 +86,81 @@ public class ThroughputContentionBenchmark
             });
         }
 
-        _start.Set();
+        _start.SetResult();
         await Task.WhenAll(_workers).ConfigureAwait(false);
 
-        if (_counter == 0) ThrowImpossible();
+        if (_counter != Contenders * OpsPerWorker) ThrowImpossible();
     }
 
-    //[Benchmark(Description = "Nito: Throughput contention")]
-    //public async Task Nito()
-    //{
-    //    for (int w = 0; w < Contenders; w++)
-    //    {
-    //        _workers[w] = Task.Run(async () =>
-    //        {
-    //            _start.Wait();
-    //            for (int i = 0; i < OpsPerWorker; i++)
-    //            {
-    //                IDisposable r = await _nitoLock.LockAsync().ConfigureAwait(false);
-    //                try
-    //                {
-    //                    _counter++;
-    //                }
-    //                finally
-    //                {
-    //                    r.Dispose();
-    //                }
-    //            }
-    //        });
-    //    }
-
-    //    _start.Set();
-    //    await Task.WhenAll(_workers).ConfigureAwait(false);
-
-    //    if (_counter == 0) ThrowImpossible();
-    //}
-
-    //[Benchmark(Description = "NExtensions: Throughput contention")]
-    //public async Task NExtensions()
-    //{
-    //    for (int w = 0; w < Contenders; w++)
-    //    {
-    //        _workers[w] = Task.Run(async () =>
-    //        {
-    //            _start.Wait();
-    //            for (int i = 0; i < OpsPerWorker; i++)
-    //            {
-    //                var r = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
-    //                try
-    //                {
-    //                    _counter++;
-    //                }
-    //                finally
-    //                {
-    //                    r.Dispose();
-    //                }
-    //            }
-    //        });
-    //    }
-
-    //    _start.Set();
-    //    await Task.WhenAll(_workers).ConfigureAwait(false);
-
-    //    if (_counter == 0) ThrowImpossible();
-    //}
-
-    [Benchmark(Description = "SemaphoreSlim: Throughput contention")]
-    public async Task SemaphoreSlim()
+    [Benchmark(Description = "Nito: Throughput contention")]
+    public async Task Nito()
     {
+        ResetBatch();
         for (int w = 0; w < Contenders; w++)
         {
             _workers[w] = Task.Run(async () =>
             {
-                _start.Wait();
+                await _start.Task.ConfigureAwait(false);
+                for (int i = 0; i < OpsPerWorker; i++)
+                {
+                    IDisposable r = await _nitoLock.LockAsync().ConfigureAwait(false);
+                    try
+                    {
+                        _counter++;
+                    }
+                    finally
+                    {
+                        r.Dispose();
+                    }
+                }
+            });
+        }
+
+        _start.SetResult();
+        await Task.WhenAll(_workers).ConfigureAwait(false);
+
+        if (_counter != Contenders * OpsPerWorker) ThrowImpossible();
+    }
+
+    [Benchmark(Description = "NExtensions: Throughput contention")]
+    public async Task NExtensions()
+    {
+        ResetBatch();
+        for (int w = 0; w < Contenders; w++)
+        {
+            _workers[w] = Task.Run(async () =>
+            {
+                await _start.Task.ConfigureAwait(false);
+                for (int i = 0; i < OpsPerWorker; i++)
+                {
+                    var r = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
+                    try
+                    {
+                        _counter++;
+                    }
+                    finally
+                    {
+                        r.Dispose();
+                    }
+                }
+            });
+        }
+
+        _start.SetResult();
+        await Task.WhenAll(_workers).ConfigureAwait(false);
+
+        if (_counter != Contenders * OpsPerWorker) ThrowImpossible();
+    }
+
+    [Benchmark(Description = "SemaphoreSlim: Throughput contention")]
+    public async Task SemaphoreSlim()
+    {
+        ResetBatch();
+        for (int w = 0; w < Contenders; w++)
+        {
+            _workers[w] = Task.Run(async () =>
+            {
+                await _start.Task.ConfigureAwait(false);
                 for (int i = 0; i < OpsPerWorker; i++)
                 {
                     await _semaphoreSlim.WaitAsync().ConfigureAwait(false);
@@ -171,11 +176,58 @@ public class ThroughputContentionBenchmark
             });
         }
 
-        _start.Set();
+        _start.SetResult();
         await Task.WhenAll(_workers).ConfigureAwait(false);
 
-        if (_counter == 0) ThrowImpossible();
+        if (_counter != Contenders * OpsPerWorker) ThrowImpossible();
     }
 
-    private static void ThrowImpossible() => throw new InvalidOperationException("Impossible");
+    private static void ThrowImpossible() => throw new InvalidOperationException("Protected increment count does not match completed operations.");
+
+    [Benchmark(Description = "lock (object / Monitor) : Throughput contention")]
+    public async Task Monitor()
+    {
+        ResetBatch();
+        for (int w = 0; w < Contenders; w++)
+        {
+            _workers[w] = Task.Run(async () =>
+            {
+                await _start.Task.ConfigureAwait(false);
+                for (int i = 0; i < OpsPerWorker; i++)
+                {
+                    lock (_monitor)
+                    {
+                        _counter++;
+                    }
+                }
+            });
+        }
+
+        _start.SetResult();
+        await Task.WhenAll(_workers).ConfigureAwait(false);
+        if (_counter != Contenders * OpsPerWorker) ThrowImpossible();
+    }
+    [Benchmark(Description = "System.Threading.Lock : Throughput contention")]
+    public async Task ThreadingLock()
+    {
+        ResetBatch();
+        for (int w = 0; w < Contenders; w++)
+        {
+            _workers[w] = Task.Run(async () =>
+            {
+                await _start.Task.ConfigureAwait(false);
+                for (int i = 0; i < OpsPerWorker; i++)
+                {
+                    lock (_threadingLock)
+                    {
+                        _counter++;
+                    }
+                }
+            });
+        }
+
+        _start.SetResult();
+        await Task.WhenAll(_workers).ConfigureAwait(false);
+        if (_counter != Contenders * OpsPerWorker) ThrowImpossible();
+    }
 }

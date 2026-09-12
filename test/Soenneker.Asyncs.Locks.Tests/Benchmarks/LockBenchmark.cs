@@ -11,6 +11,8 @@ namespace Soenneker.Asyncs.Locks.Tests.Benchmarks;
 [MemoryDiagnoser]
 public class LockBenchmark
 {
+    private readonly object _monitor = new();
+    private readonly System.Threading.Lock _threadingLock = new();
     private SoennekerAsyncLock _soennekerLock = null!;
     private NitoAsyncLock _nitoLock = null!;
     private NExtensionsAsyncLock _nextensionsLock = null!;
@@ -38,22 +40,39 @@ public class LockBenchmark
         using Releaser releaser = await _soennekerLock.Lock().ConfigureAwait(false);
     }
 
-    //[Benchmark(Description = "Nito.AsyncEx.AsyncLock")]
-    //public async ValueTask NitoAsync()
-    //{
-    //    using IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
-    //}
+    [Benchmark(Description = "Nito.AsyncEx.AsyncLock")]
+    public async ValueTask NitoAsync()
+    {
+        using IDisposable releaser = await _nitoLock.LockAsync().ConfigureAwait(false);
+    }
 
-    //[Benchmark(Description = "NExtensions.Async.AsyncLock")]
-    //public async ValueTask NExtensionsAsync()
-    //{
-    //    using NExtensionsAsyncLock.Releaser releaser = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
-    //}
+    [Benchmark(Description = "NExtensions.Async.AsyncLock")]
+    public async ValueTask NExtensionsAsync()
+    {
+        using NExtensionsAsyncLock.Releaser releaser = await _nextensionsLock.EnterScopeAsync().ConfigureAwait(false);
+    }
 
     [Benchmark(Description = "SemaphoreSlim")]
     public async ValueTask SemaphoreSlimAsync()
     {
         await _semaphoreSlim.WaitAsync().ConfigureAwait(false);
         _semaphoreSlim.Release();
+    }
+
+    [Benchmark(Description = "lock (object / Monitor)")]
+    public void Monitor()
+    {
+        lock (_monitor)
+        {
+
+        }
+    }
+    [Benchmark(Description = "System.Threading.Lock")]
+    public void ThreadingLock()
+    {
+        lock (_threadingLock)
+        {
+
+        }
     }
 }
