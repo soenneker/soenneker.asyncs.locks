@@ -1,5 +1,4 @@
 using Soenneker.Asyncs.Locks.Abstract;
-using Soenneker.Queues.Intrusive.ValueMpsc;
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -7,7 +6,6 @@ using System.Threading.Tasks;
 
 namespace Soenneker.Asyncs.Locks;
 
-/// <inheritdoc cref="IAsyncLock" />
 public sealed class AsyncLock : IAsyncLock
 {
     private const long _countMask = uint.MaxValue;
@@ -18,14 +16,11 @@ public sealed class AsyncLock : IAsyncLock
     // Low 32 bits: holder plus announced waiters. High bits: disposal, queue-consumer ownership, and overflow mode.
     private long _state;
     private Waiter? _frontWaiter;
-    private ValueIntrusiveMpscReclaimingQueue<Waiter> _waiterQueue;
+    private WaiterQueue? _waiterQueue;
     private TaskCompletionSource? _disposeWaiter;
 
     public AsyncLock()
     {
-        Waiter stub = Waiter.Rent();
-        stub.Next = null;
-        _waiterQueue = new ValueIntrusiveMpscReclaimingQueue<Waiter>(stub);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -105,7 +100,8 @@ public sealed class AsyncLock : IAsyncLock
 
                 // A count of one without an active consumer proves that only the current
                 // holder precedes us, so this caller uniquely owns the direct slot.
-                return count == 1 && !HasConsumer(state) && (state & _overflowBit) == 0 ? 1 : 2;
+                return count == 1 && !HasConsumer(state) && (state & _overflowBit) == 0 &&
+                       Volatile.Read(ref _frontWaiter) is null ? 1 : 2;
             }
 
             state = observed;
@@ -124,7 +120,7 @@ public sealed class AsyncLock : IAsyncLock
         if ((Volatile.Read(ref _state) & _overflowBit) == 0)
             Interlocked.Or(ref _state, _overflowBit);
 
-        _waiterQueue.Enqueue(waiter);
+        (Volatile.Read(ref _waiterQueue) ?? CreateWaiterQueue()).Queue.Enqueue(waiter);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -182,6 +178,15 @@ public sealed class AsyncLock : IAsyncLock
     {
         long state = Volatile.Read(ref _state);
 
+        if ((state & ~_overflowBit) == 1)
+        {
+            long observed = Interlocked.CompareExchange(ref _state, state - 1, state);
+            if (observed == state)
+                return;
+
+            state = observed;
+        }
+
         // With exactly one non-cancellable waiter, the release CAS itself can
         // linearize ownership transfer. The published front pointer prevents a
         // following waiter from reusing the slot until we detach this one.
@@ -197,6 +202,12 @@ public sealed class AsyncLock : IAsyncLock
             }
         }
 
+        ExitSlow(state);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ExitSlow(long state)
+    {
         var spinner = new SpinWait();
 
         while (true)
@@ -287,8 +298,8 @@ public sealed class AsyncLock : IAsyncLock
             if (waiter is not null)
                 return waiter;
 
-            if (_waiterQueue.TryDequeueSpinUntilLinked(out waiter))
-                return waiter;
+            if (TryDequeueOverflow(out waiter))
+                return waiter!;
 
             spinner.SpinOnce();
         }
@@ -376,6 +387,28 @@ public sealed class AsyncLock : IAsyncLock
 
         var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         return Interlocked.CompareExchange(ref _disposeWaiter, created, null) ?? created;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private WaiterQueue CreateWaiterQueue()
+    {
+        WaiterQueue? queue = Volatile.Read(ref _waiterQueue);
+        if (queue is not null)
+            return queue;
+
+        var created = new WaiterQueue();
+        return Interlocked.CompareExchange(ref _waiterQueue, created, null) ?? created;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryDequeueOverflow(out Waiter? waiter)
+    {
+        WaiterQueue? queue = Volatile.Read(ref _waiterQueue);
+        if (queue is not null)
+            return queue.Queue.TryDequeueSpinUntilLinked(out waiter);
+
+        waiter = null;
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
