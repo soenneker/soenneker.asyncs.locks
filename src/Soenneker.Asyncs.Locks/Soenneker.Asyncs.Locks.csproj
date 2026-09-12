@@ -45,6 +45,6 @@
 
     <ItemGroup>
         <PackageReference Include="Soenneker.Atomics.ValueInts" Version="4.0.28" />
-        <PackageReference Include="Soenneker.Queues.Intrusive.ValueMpsc" Version="4.0.38" />
+        <PackageReference Include="Soenneker.Queues.Intrusive.ValueMpsc" Version="4.0.39" />
     </ItemGroup>
 </Project>
