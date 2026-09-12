@@ -138,7 +138,8 @@ public sealed class AsyncLock : IAsyncLock
             return true;
         }
 
-        if (observed == _overflowBit && Interlocked.CompareExchange(ref _state, _overflowBit | 1, _overflowBit) == _overflowBit)
+        if (observed == _overflowBit &&
+            Interlocked.CompareExchange(ref _state, _overflowBit | 1, _overflowBit) == _overflowBit)
         {
             releaser = new Releaser(this);
             return true;
