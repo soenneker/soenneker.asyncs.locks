@@ -8,7 +8,6 @@ using System.Threading.Tasks.Sources;
 
 namespace Soenneker.Asyncs.Locks;
 
-/// <inheritdoc cref="IIntrusiveNode{Waiter}" />
 internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter>
 {
     private const int _completedBit = 1 << 16;
@@ -18,8 +17,6 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     [ThreadStatic]
     private static Waiter? _localPool;
 
-    private static readonly Action<object?> _cancelCallback = static state => ((Waiter)state!).Cancel();
-
     private ValueAtomicInt _state;
     private ValueAtomicInt _reclamationState;
     private ManualResetValueTaskSourceCore<Releaser> _core = new() {RunContinuationsAsynchronously = true};
@@ -27,6 +24,8 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     private CancellationTokenRegistration _registration;
     private bool _cancellable;
     private bool _requiresArbitration;
+    // -1: async; 0: synchronous spinner; 1: monitor waiter; 2: sync completion published.
+    private int _syncState;
     private short _queuedVersion;
     private Waiter? _next;
 
@@ -84,8 +83,65 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     {
         _cancellable = false;
         _requiresArbitration = false;
+        _syncState = -1;
         _queuedVersion = _core.Version;
         _state.VolatileWrite((ushort)_queuedVersion);
+    }
+
+    internal void PrepareSync(CancellationToken cancellationToken)
+    {
+        Prepare();
+        _syncState = 0;
+        // Thread interruption can compete with a grant even without a cancellation token.
+        _requiresArbitration = true;
+        if (cancellationToken.CanBeCanceled)
+            RegisterCancellation(cancellationToken);
+    }
+
+    internal Releaser GetResultSync()
+    {
+        ThreadInterruptedException? interrupted = null;
+        short version = _queuedVersion;
+        var spinner = new SpinWait();
+        while (Volatile.Read(ref _syncState) != 2 && !spinner.NextSpinWillYield)
+            spinner.SpinOnce();
+
+        while (Volatile.Read(ref _syncState) != 2)
+        {
+            try
+            {
+                lock (this)
+                {
+                    if (interrupted is not null)
+                        TrySetException(interrupted);
+
+                    // Register the need for a pulse while holding the monitor so a
+                    // completion cannot slip between the predicate and Wait.
+                    Interlocked.CompareExchange(ref _syncState, 1, 0);
+                    while (Volatile.Read(ref _syncState) != 2)
+                        Monitor.Wait(this);
+                }
+
+                break;
+            }
+            catch (ThreadInterruptedException exception)
+            {
+                // Entering the monitor can also be interrupted. Reserve the failure
+                // after reacquiring it so completion cannot be abandoned midway.
+                interrupted = exception;
+            }
+        }
+
+        // Consume outside the monitor: disposing a cancellation registration may
+        // wait for a callback that needs this monitor to finish its notification.
+        Releaser result = GetResult(version);
+        if (interrupted is not null)
+        {
+            result.Dispose();
+            throw interrupted;
+        }
+
+        return result;
     }
 
     private void RegisterCancellation(CancellationToken cancellationToken)
@@ -96,13 +152,13 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
         if (cancellationToken.IsCancellationRequested)
         {
             if (TryComplete())
-                _core.SetException(new OperationCanceledException(cancellationToken));
+                CompleteException(new OperationCanceledException(cancellationToken));
 
             return;
         }
 
         _cancellationToken = cancellationToken;
-        _registration = cancellationToken.UnsafeRegister(_cancelCallback, this);
+        _registration = cancellationToken.UnsafeRegister(static state => ((Waiter)state!).Cancel(), this);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -113,14 +169,73 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
     private void Cancel()
     {
         if (TryComplete())
-            _core.SetException(new OperationCanceledException(_cancellationToken));
+            CompleteException(new OperationCanceledException(_cancellationToken));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryReserveGrant() => TryComplete();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void CompleteGrant(Releaser releaser) => _core.SetResult(releaser);
+    internal void CompleteGrant(Releaser releaser)
+    {
+        if (_syncState >= 0)
+            CompleteSync(releaser);
+        else
+            _core.SetResult(releaser);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void CompleteSync(Releaser releaser)
+    {
+        _core.SetResult(releaser);
+        NotifySync();
+    }
+
+    private void CompleteException(Exception exception)
+    {
+        if (_syncState < 0)
+        {
+            _core.SetException(exception);
+            return;
+        }
+
+        _core.SetException(exception);
+        NotifySync();
+    }
+
+    private void NotifySync()
+    {
+        // This is the last access to completion state: a spinning consumer may
+        // immediately consume and recycle the waiter after observing 2.
+        if (Interlocked.Exchange(ref _syncState, 2) == 1)
+            PulseSync();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void PulseSync()
+    {
+        bool interrupted = false;
+        while (true)
+        {
+            try
+            {
+                lock (this)
+                    Monitor.Pulse(this);
+                break;
+            }
+            catch (ThreadInterruptedException)
+            {
+                // A producer must finish notification even if interrupted while
+                // entering the monitor; restore the pending interrupt afterward.
+                interrupted = true;
+            }
+        }
+
+        // A delayed pulse can reach a reused waiter. It is harmless because every
+        // monitor wait checks its own completion predicate before proceeding.
+        if (interrupted)
+            Thread.CurrentThread.Interrupt();
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TrySetException(Exception exception)
@@ -128,7 +243,7 @@ internal sealed class Waiter : IValueTaskSource<Releaser>, IIntrusiveNode<Waiter
         if (!TryComplete())
             return false;
 
-        _core.SetException(exception);
+        CompleteException(exception);
         return true;
     }
 

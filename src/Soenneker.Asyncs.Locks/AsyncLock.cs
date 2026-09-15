@@ -168,9 +168,9 @@ public sealed class AsyncLock : IAsyncLock
     private Releaser LockSyncSlow(CancellationToken cancellationToken, bool useFrontSlot)
     {
         Waiter waiter = Waiter.Rent();
-        ValueTask<Releaser> result = waiter.NewValueTask(cancellationToken);
+        waiter.PrepareSync(cancellationToken);
         Publish(waiter, useFrontSlot);
-        return result.AsTask().GetAwaiter().GetResult();
+        return waiter.GetResultSync();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
