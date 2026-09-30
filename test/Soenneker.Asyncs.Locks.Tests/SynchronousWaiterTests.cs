@@ -12,7 +12,7 @@ public sealed class SynchronousWaiterTests
     [Arguments(1)]
     [Arguments(2)]
     [Arguments(3)]
-    public async Task Blocked_waiter_wakes_for_grant_cancellation_disposal_and_interruption(int outcome)
+    public async ValueTask Blocked_waiter_wakes_for_grant_cancellation_disposal_and_interruption(int outcome)
     {
         using var gate = new AsyncLock();
         using var cancellation = new CancellationTokenSource();
@@ -69,7 +69,7 @@ public sealed class SynchronousWaiterTests
     }
 
     [Test]
-    public async Task Cancellation_racing_a_synchronous_grant_does_not_leak_ownership()
+    public async ValueTask Cancellation_racing_a_synchronous_grant_does_not_leak_ownership()
     {
         using var gate = new AsyncLock();
         for (int i = 0; i < 256; i++)
@@ -109,7 +109,7 @@ public sealed class SynchronousWaiterTests
     }
 
     [Test]
-    public async Task Mixed_sync_and_async_waiters_preserve_exclusion_and_reuse()
+    public async ValueTask Mixed_sync_and_async_waiters_preserve_exclusion_and_reuse()
     {
         using var gate = new AsyncLock();
         int holders = 0, violations = 0, completed = 0;

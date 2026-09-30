@@ -27,7 +27,7 @@ public sealed class AsyncLockTests
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     [Test]
-    public async Task LockAsync_Uncontended_AcquiresImmediately()
+    public async ValueTask LockAsync_Uncontended_AcquiresImmediately()
     {
         await using var asyncLock = new AsyncLock();
         using Releaser releaser = await asyncLock.Lock(TestToken);
@@ -41,7 +41,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_Contended_WaitsForRelease()
+    public async ValueTask LockAsync_Contended_WaitsForRelease()
     {
         await using var asyncLock = new AsyncLock();
         // Hold the lock on the test thread to avoid scheduling races.
@@ -82,7 +82,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_MultipleWaiters_ProcessesInOrder()
+    public async ValueTask LockAsync_MultipleWaiters_ProcessesInOrder()
     {
         const int waiters = 10;
         await using var asyncLock = new AsyncLock();
@@ -114,7 +114,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_WithCancellation_CancelsWhenRequested()
+    public async ValueTask LockAsync_WithCancellation_CancelsWhenRequested()
     {
         await using var asyncLock = new AsyncLock();
         using var cts = new CancellationTokenSource();
@@ -134,7 +134,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_CancelVsRelease_Race_ObservesOneOutcome()
+    public async ValueTask LockAsync_CancelVsRelease_Race_ObservesOneOutcome()
     {
         await using var asyncLock = new AsyncLock();
 
@@ -186,7 +186,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_CancelVsRelease_Race_Stress_ObservesOneOutcome()
+    public async ValueTask LockAsync_CancelVsRelease_Race_Stress_ObservesOneOutcome()
     {
         await using var asyncLock = new AsyncLock();
 
@@ -274,7 +274,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_AlreadyCanceled_ThrowsImmediately()
+    public async ValueTask LockAsync_AlreadyCanceled_ThrowsImmediately()
     {
         await using var asyncLock = new AsyncLock();
         using var cts = new CancellationTokenSource();
@@ -297,7 +297,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_PreventsNewAcquisitions(CancellationToken cancellationToken)
+    public async ValueTask Dispose_PreventsNewAcquisitions(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         await asyncLock.DisposeAsync();
@@ -311,7 +311,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_FailsQueuedWaiters()
+    public async ValueTask Dispose_FailsQueuedWaiters()
     {
         await using var asyncLock = new AsyncLock();
         TaskCompletionSource<bool> allowRelease = NewTcs();
@@ -341,7 +341,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_ConcurrentRelease_CompletesWithValidOutcome()
+    public async ValueTask Dispose_ConcurrentRelease_CompletesWithValidOutcome()
     {
         for (int i = 0; i < 200; i++)
         {
@@ -380,7 +380,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_ConcurrentRelease_Stress_CompletesWithValidOutcome()
+    public async ValueTask Dispose_ConcurrentRelease_Stress_CompletesWithValidOutcome()
     {
         for (int i = 0; i < 5000; i++)
         {
@@ -418,7 +418,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_AllowsCurrentHolderToComplete()
+    public async ValueTask Dispose_AllowsCurrentHolderToComplete()
     {
         var asyncLock = new AsyncLock();
         TaskCompletionSource<bool> allowExit = NewTcs();
@@ -442,7 +442,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task DisposeAsync_WaitsForCurrentHolder()
+    public async ValueTask DisposeAsync_WaitsForCurrentHolder()
     {
         var asyncLock = new AsyncLock();
         var released = false;
@@ -483,7 +483,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task DisposeAsync_CanBeCalledMultipleTimes()
+    public async ValueTask DisposeAsync_CanBeCalledMultipleTimes()
     {
         var asyncLock = new AsyncLock();
         Func<Task>? act1 = asyncLock.Awaiting(l => l.DisposeAsync().AsTask());
@@ -494,7 +494,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_MixedWithLockSync_WorksCorrectly()
+    public async ValueTask LockAsync_MixedWithLockSync_WorksCorrectly()
     {
         await using var asyncLock = new AsyncLock();
         var order = new ConcurrentQueue<string>();
@@ -535,7 +535,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Releaser_Dispose_ReleasesLock()
+    public async ValueTask Releaser_Dispose_ReleasesLock()
     {
         await using var asyncLock = new AsyncLock();
         Releaser first = await asyncLock.Lock(TestToken);
@@ -549,7 +549,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_RapidAcquireRelease_WorksCorrectly()
+    public async ValueTask LockAsync_RapidAcquireRelease_WorksCorrectly()
     {
         await using var asyncLock = new AsyncLock();
         var count = 0;
@@ -574,7 +574,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_TokenlessDirectHandoff_Stress_WorksCorrectly()
+    public async ValueTask LockAsync_TokenlessDirectHandoff_Stress_WorksCorrectly()
     {
         await using var asyncLock = new AsyncLock();
         var count = 0;
@@ -596,7 +596,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_TokenlessDirectAndOverflowWaiters_AllAcquire()
+    public async ValueTask LockAsync_TokenlessDirectAndOverflowWaiters_AllAcquire()
     {
         await using var asyncLock = new AsyncLock();
         Releaser holder = await asyncLock.Lock();
@@ -616,7 +616,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task Dispose_TokenlessDirectHandoff_Race_Stress_Completes()
+    public async ValueTask Dispose_TokenlessDirectHandoff_Race_Stress_Completes()
     {
         for (var i = 0; i < 5_000; i++)
         {
@@ -679,7 +679,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_AfterDispose_ThrowsObjectDisposedException(CancellationToken cancellationToken)
+    public async ValueTask LockAsync_AfterDispose_ThrowsObjectDisposedException(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         await asyncLock.DisposeAsync();
@@ -704,7 +704,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_ConcurrentDispose_HandlesGracefully()
+    public async ValueTask LockAsync_ConcurrentDispose_HandlesGracefully()
     {
         var asyncLock = new AsyncLock();
         var exceptions = new ConcurrentBag<Exception>();
@@ -739,7 +739,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async Task LockAsync_ConcurrentDispose_Stress_HandlesGracefully()
+    public async ValueTask LockAsync_ConcurrentDispose_Stress_HandlesGracefully()
     {
         for (int i = 0; i < 500; i++)
         {

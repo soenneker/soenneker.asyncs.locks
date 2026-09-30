@@ -10,7 +10,7 @@ public sealed class LockRegressionTests
     [Test]
     [Arguments(2)]
     [Arguments(8)]
-    public async Task Direct_and_overflow_handoffs_preserve_exclusion(int workers)
+    public async ValueTask Direct_and_overflow_handoffs_preserve_exclusion(int workers)
     {
         using var gate = new AsyncLock();
         int holders = 0, violations = 0, completed = 0;
