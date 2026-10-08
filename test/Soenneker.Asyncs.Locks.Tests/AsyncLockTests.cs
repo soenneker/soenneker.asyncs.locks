@@ -27,7 +27,7 @@ public sealed class AsyncLockTests
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     [Test]
-    public async ValueTask LockAsync_Uncontended_AcquiresImmediately()
+    public async ValueTask LockAsync_Uncontended_AcquiresImmediately(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         using Releaser releaser = await asyncLock.Lock(TestToken);
@@ -41,7 +41,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_Contended_WaitsForRelease()
+    public async ValueTask LockAsync_Contended_WaitsForRelease(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         // Hold the lock on the test thread to avoid scheduling races.
@@ -82,7 +82,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_MultipleWaiters_ProcessesInOrder()
+    public async ValueTask LockAsync_MultipleWaiters_ProcessesInOrder(CancellationToken cancellationToken)
     {
         const int waiters = 10;
         await using var asyncLock = new AsyncLock();
@@ -114,7 +114,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_WithCancellation_CancelsWhenRequested()
+    public async ValueTask LockAsync_WithCancellation_CancelsWhenRequested(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         using var cts = new CancellationTokenSource();
@@ -134,7 +134,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_CancelVsRelease_Race_ObservesOneOutcome()
+    public async ValueTask LockAsync_CancelVsRelease_Race_ObservesOneOutcome(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
 
@@ -150,13 +150,13 @@ public sealed class AsyncLockTests
 
             Task cancelTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 cts.Cancel();
             }, TestToken);
 
             Task releaseTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 holder.Dispose();
             }, TestToken);
 
@@ -186,7 +186,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_CancelVsRelease_Race_Stress_ObservesOneOutcome()
+    public async ValueTask LockAsync_CancelVsRelease_Race_Stress_ObservesOneOutcome(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
 
@@ -201,13 +201,13 @@ public sealed class AsyncLockTests
 
             Task cancelTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 cts.Cancel();
             }, TestToken);
 
             Task releaseTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 holder.Dispose();
             }, TestToken);
 
@@ -274,7 +274,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_AlreadyCanceled_ThrowsImmediately()
+    public async ValueTask LockAsync_AlreadyCanceled_ThrowsImmediately(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         using var cts = new CancellationTokenSource();
@@ -311,7 +311,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask Dispose_FailsQueuedWaiters()
+    public async ValueTask Dispose_FailsQueuedWaiters(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         TaskCompletionSource<bool> allowRelease = NewTcs();
@@ -341,7 +341,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask Dispose_ConcurrentRelease_CompletesWithValidOutcome()
+    public async ValueTask Dispose_ConcurrentRelease_CompletesWithValidOutcome(CancellationToken cancellationToken)
     {
         for (int i = 0; i < 200; i++)
         {
@@ -355,13 +355,13 @@ public sealed class AsyncLockTests
 
             Task disposeTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 asyncLock.Dispose();
             }, TestToken);
 
             Task releaseTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 holder.Dispose();
             }, TestToken);
 
@@ -380,7 +380,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask Dispose_ConcurrentRelease_Stress_CompletesWithValidOutcome()
+    public async ValueTask Dispose_ConcurrentRelease_Stress_CompletesWithValidOutcome(CancellationToken cancellationToken)
     {
         for (int i = 0; i < 5000; i++)
         {
@@ -393,13 +393,13 @@ public sealed class AsyncLockTests
 
             Task disposeTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 asyncLock.Dispose();
             }, TestToken);
 
             Task releaseTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 holder.Dispose();
             }, TestToken);
 
@@ -418,7 +418,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask Dispose_AllowsCurrentHolderToComplete()
+    public async ValueTask Dispose_AllowsCurrentHolderToComplete(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         TaskCompletionSource<bool> allowExit = NewTcs();
@@ -442,7 +442,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask DisposeAsync_WaitsForCurrentHolder()
+    public async ValueTask DisposeAsync_WaitsForCurrentHolder(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         var released = false;
@@ -483,7 +483,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask DisposeAsync_CanBeCalledMultipleTimes()
+    public async ValueTask DisposeAsync_CanBeCalledMultipleTimes(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         Func<Task>? act1 = asyncLock.Awaiting(l => l.DisposeAsync().AsTask());
@@ -494,7 +494,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_MixedWithLockSync_WorksCorrectly()
+    public async ValueTask LockAsync_MixedWithLockSync_WorksCorrectly(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         var order = new ConcurrentQueue<string>();
@@ -535,7 +535,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask Releaser_Dispose_ReleasesLock()
+    public async ValueTask Releaser_Dispose_ReleasesLock(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         Releaser first = await asyncLock.Lock(TestToken);
@@ -549,7 +549,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_RapidAcquireRelease_WorksCorrectly()
+    public async ValueTask LockAsync_RapidAcquireRelease_WorksCorrectly(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         var count = 0;
@@ -574,7 +574,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_TokenlessDirectHandoff_Stress_WorksCorrectly()
+    public async ValueTask LockAsync_TokenlessDirectHandoff_Stress_WorksCorrectly(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
         var count = 0;
@@ -584,7 +584,7 @@ public sealed class AsyncLockTests
                                    {
                                        for (var i = 0; i < 20_000; i++)
                                        {
-                                           using Releaser releaser = await asyncLock.Lock();
+                                           using Releaser releaser = await asyncLock.Lock(cancellationToken: cancellationToken);
                                            count++;
                                            await Task.Yield();
                                        }
@@ -596,12 +596,12 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_TokenlessDirectAndOverflowWaiters_AllAcquire()
+    public async ValueTask LockAsync_TokenlessDirectAndOverflowWaiters_AllAcquire(CancellationToken cancellationToken)
     {
         await using var asyncLock = new AsyncLock();
-        Releaser holder = await asyncLock.Lock();
+        Releaser holder = await asyncLock.Lock(cancellationToken: cancellationToken);
         Task<Releaser>[] waiters = Enumerable.Range(0, 32)
-                                             .Select(_ => asyncLock.Lock().AsTask())
+                                             .Select(_ => asyncLock.Lock(cancellationToken: cancellationToken).AsTask())
                                              .ToArray();
 
         holder.Dispose();
@@ -616,23 +616,23 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask Dispose_TokenlessDirectHandoff_Race_Stress_Completes()
+    public async ValueTask Dispose_TokenlessDirectHandoff_Race_Stress_Completes(CancellationToken cancellationToken)
     {
         for (var i = 0; i < 5_000; i++)
         {
             var asyncLock = new AsyncLock();
-            Releaser holder = await asyncLock.Lock();
-            Task<Releaser> waiter = asyncLock.Lock().AsTask();
+            Releaser holder = await asyncLock.Lock(cancellationToken: cancellationToken);
+            Task<Releaser> waiter = asyncLock.Lock(cancellationToken: cancellationToken).AsTask();
 
             var start = new ManualResetEventSlim(false);
             Task disposeTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 asyncLock.Dispose();
             }, TestToken);
             Task releaseTask = Task.Run(() =>
             {
-                start.Wait();
+                start.Wait(cancellationToken: cancellationToken);
                 holder.Dispose();
             }, TestToken);
 
@@ -704,7 +704,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_ConcurrentDispose_HandlesGracefully()
+    public async ValueTask LockAsync_ConcurrentDispose_HandlesGracefully(CancellationToken cancellationToken)
     {
         var asyncLock = new AsyncLock();
         var exceptions = new ConcurrentBag<Exception>();
@@ -739,7 +739,7 @@ public sealed class AsyncLockTests
     }
 
     [Test]
-    public async ValueTask LockAsync_ConcurrentDispose_Stress_HandlesGracefully()
+    public async ValueTask LockAsync_ConcurrentDispose_Stress_HandlesGracefully(CancellationToken cancellationToken)
     {
         for (int i = 0; i < 500; i++)
         {

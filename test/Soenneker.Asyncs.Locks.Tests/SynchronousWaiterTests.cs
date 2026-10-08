@@ -12,11 +12,11 @@ public sealed class SynchronousWaiterTests
     [Arguments(1)]
     [Arguments(2)]
     [Arguments(3)]
-    public async ValueTask Blocked_waiter_wakes_for_grant_cancellation_disposal_and_interruption(int outcome)
+    public async ValueTask Blocked_waiter_wakes_for_grant_cancellation_disposal_and_interruption(int outcome, CancellationToken cancellationToken)
     {
         using var gate = new AsyncLock();
         using var cancellation = new CancellationTokenSource();
-        Releaser held = gate.LockSync();
+        Releaser held = gate.LockSync(cancellationToken: cancellationToken);
         bool released = false;
         var completion = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var worker = new Thread(() =>
@@ -46,7 +46,7 @@ public sealed class SynchronousWaiterTests
                 case 3: worker.Interrupt(); break;
             }
 
-            Exception? error = await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Exception? error = await completion.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken: cancellationToken);
             await Assert.That(error?.GetType()).IsEqualTo(outcome switch
             {
                 1 => typeof(OperationCanceledException),
@@ -69,13 +69,13 @@ public sealed class SynchronousWaiterTests
     }
 
     [Test]
-    public async ValueTask Cancellation_racing_a_synchronous_grant_does_not_leak_ownership()
+    public async ValueTask Cancellation_racing_a_synchronous_grant_does_not_leak_ownership(CancellationToken cancellationToken)
     {
         using var gate = new AsyncLock();
         for (int i = 0; i < 256; i++)
         {
             using var cancellation = new CancellationTokenSource();
-            Releaser held = gate.LockSync();
+            Releaser held = gate.LockSync(cancellationToken: cancellationToken);
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var worker = new Thread(() =>
             {
@@ -101,15 +101,15 @@ public sealed class SynchronousWaiterTests
             }
 
             Parallel.Invoke(cancellation.Cancel, held.Dispose);
-            await completion.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await completion.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken: cancellationToken);
             if (!worker.Join(TimeSpan.FromSeconds(10)))
                 throw new TimeoutException();
-            using Releaser check = await gate.Lock().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            using Releaser check = await gate.Lock(cancellationToken: cancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), cancellationToken: cancellationToken);
         }
     }
 
     [Test]
-    public async ValueTask Mixed_sync_and_async_waiters_preserve_exclusion_and_reuse()
+    public async ValueTask Mixed_sync_and_async_waiters_preserve_exclusion_and_reuse(CancellationToken cancellationToken)
     {
         using var gate = new AsyncLock();
         int holders = 0, violations = 0, completed = 0;
@@ -123,23 +123,23 @@ public sealed class SynchronousWaiterTests
         {
             for (int i = 0; i < 2000; i++)
             {
-                using Releaser lease = gate.LockSync();
+                using Releaser lease = gate.LockSync(cancellationToken: cancellationToken);
                 Enter();
                 Thread.Yield();
                 Interlocked.Decrement(ref holders);
             }
-        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+        }, cancellationToken, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
         Task[] asynchronous = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
         {
             for (int i = 0; i < 2000; i++)
             {
-                using Releaser lease = await gate.Lock();
+                using Releaser lease = await gate.Lock(cancellationToken: cancellationToken);
                 Enter();
                 await Task.Yield();
                 Interlocked.Decrement(ref holders);
             }
-        })).ToArray();
-        await Task.WhenAll(synchronous.Concat(asynchronous)).WaitAsync(TimeSpan.FromSeconds(20));
+        }, cancellationToken: cancellationToken)).ToArray();
+        await Task.WhenAll(synchronous.Concat(asynchronous)).WaitAsync(TimeSpan.FromSeconds(20), cancellationToken: cancellationToken);
         await Assert.That(violations).IsEqualTo(0);
         await Assert.That(completed).IsEqualTo(16000);
     }
