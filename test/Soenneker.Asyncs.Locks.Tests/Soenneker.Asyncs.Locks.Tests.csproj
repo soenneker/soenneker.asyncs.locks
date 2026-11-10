@@ -11,7 +11,7 @@
         <PackageReference Include="AwesomeAssertions" Version="9.6.0" />
         <PackageReference Include="NExtensions.Async" Version="1.3.0" />
         <PackageReference Include="Nito.AsyncEx" Version="5.1.2" />
-        <PackageReference Include="Soenneker.Tests.Attributes.Local" Version="11.0.165" />
+        <PackageReference Include="Soenneker.Tests.Attributes.Local" Version="11.0.166" />
         <PackageReference Include="Soenneker.Tests.Benchmark" Version="11.0.231" />
         <PackageReference Include="TUnit" Version="1.81.16" />
     </ItemGroup>
